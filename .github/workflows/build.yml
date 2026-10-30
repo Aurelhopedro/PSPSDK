@@ -1,0 +1,41 @@
+name: Build PSP RPG
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    name: Compilar EBOOT.PBP
+    runs-on: ubuntu-latest
+    container:
+      image: pspdev/pspdev:latest
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Verificar toolchain PSPSDK
+        run: |
+          psp-gcc --version
+          echo "PSPDEV: $PSPDEV"
+
+      - name: Compilar projeto
+        run: |
+          export PSPDEV=/usr/local/pspdev
+          export PATH=$PATH:$PSPDEV/bin:$PSPDEV/psp/bin
+          make
+
+      - name: Verificar output
+        run: |
+          ls -lh EBOOT.PBP
+          echo "Build concluído com sucesso!"
+
+      - name: Upload EBOOT.PBP como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: PSP-RPG-EBOOT
+          path: EBOOT.PBP
+          retention-days: 30
