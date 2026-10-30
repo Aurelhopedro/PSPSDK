@@ -16,226 +16,129 @@ jobs:
     steps:
       - name: Obter repositório
         uses: actions/checkout@v4
+        with:
+          ref: main
 
-steps:
-  - name: Obter repositório
-    uses: actions/checkout@v4
-    with:
-      ref: main
+      - name: Converter OBJ para P3D
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import math
+          import struct
+          from pathlib import Path
 
-  - name: Verificar modelo OBJ
-    run: |
-      set -euo pipefail
-      test -s assets/characters/protagonist/converted/protagonist.obj
-      echo "Modelo OBJ encontrado."
-      ls -lh assets/characters/protagonist/converted/protagonist.obj
+          src = Path("assets/characters/protagonist/converted/protagonist.obj")
+          out = Path("assets/characters/protagonist/converted/protagonist.p3d")
+          report = Path("assets/characters/protagonist/converted/P3D-REPORT.md")
+          if not src.is_file():
+              raise SystemExit(f"OBJ não encontrado: {src}")
 
-  - name: Converter OBJ para P3D
-    run: |
-      set -euo pipefail
+          positions, uvs, normals, triangles = [], [], [], []
 
-      python3 - <<'PY'
-      import math
-      import struct
-      from pathlib import Path
+          def idx(value, size):
+              if not value:
+                  return None
+              n = int(value)
+              n = n - 1 if n > 0 else size + n
+              if n < 0 or n >= size:
+                  raise ValueError(f"Índice OBJ inválido: {value}")
+              return n
 
-      source = Path("assets/characters/protagonist/converted/protagonist.obj")
-      output = Path("assets/characters/protagonist/converted/protagonist.p3d")
+          def face_vertex(token):
+              p = token.split("/")
+              return (idx(p[0], len(positions)),
+                      idx(p[1], len(uvs)) if len(p) > 1 else None,
+                      idx(p[2], len(normals)) if len(p) > 2 else None)
 
-      positions = []
-      texcoords = []
-      normals = []
-      triangles = []
-
-      def normalize(v):
-          length = math.sqrt(sum(x*x for x in v))
-          if length < 1e-12:
-              return (0.0, 1.0, 0.0)
-          return tuple(x / length for x in v)
-
-      def parse_index(value, count):
-          if not value:
-              return None
-          index = int(value)
-          return index - 1 if index > 0 else count + index
-
-      with source.open("r", encoding="utf-8", errors="replace") as file:
-          for raw in file:
-              line = raw.strip()
-
-              if not line or line.startswith("#"):
+          for line_no, raw in enumerate(src.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+              s = raw.strip()
+              if not s or s.startswith("#"):
                   continue
+              p = s.split()
+              try:
+                  if p[0] == "v" and len(p) >= 4:
+                      positions.append(tuple(map(float, p[1:4])))
+                  elif p[0] == "vt" and len(p) >= 3:
+                      uvs.append(tuple(map(float, p[1:3])))
+                  elif p[0] == "vn" and len(p) >= 4:
+                      normals.append(tuple(map(float, p[1:4])))
+                  elif p[0] == "f" and len(p) >= 4:
+                      face = [face_vertex(x) for x in p[1:]]
+                      for i in range(1, len(face) - 1):
+                          triangles.append((face[0], face[i], face[i + 1]))
+              except Exception as e:
+                  raise SystemExit(f"Erro na linha {line_no} do OBJ: {e}")
 
-              parts = line.split()
-              kind = parts[0]
+          if not positions or not triangles:
+              raise SystemExit("OBJ sem posições ou faces válidas.")
 
-              if kind == "v" and len(parts) >= 4:
-                  positions.append(tuple(map(float, parts[1:4])))
+          def sub(a, b):
+              return (a[0]-b[0], a[1]-b[1], a[2]-b[2])
 
-              elif kind == "vt" and len(parts) >= 3:
-                  texcoords.append(tuple(map(float, parts[1:3])))
+          def cross(a, b):
+              return (a[1]*b[2]-a[2]*b[1],
+                      a[2]*b[0]-a[0]*b[2],
+                      a[0]*b[1]-a[1]*b[0])
 
-              elif kind == "vn" and len(parts) >= 4:
-                  normals.append(normalize(tuple(map(float, parts[1:4]))))
+          def norm(v):
+              length = math.sqrt(sum(x*x for x in v))
+              return (0.0, 1.0, 0.0) if length < 1e-12 else tuple(x/length for x in v)
 
-              elif kind == "f" and len(parts) >= 4:
-                  face = []
+          out.parent.mkdir(parents=True, exist_ok=True)
+          count = 0
+          with out.open("wb") as f:
+              f.write(struct.pack("<4sIII", b"AXP3", 1, 0, 32))
+              for tri in triangles:
+                  p0, p1, p2 = (positions[v[0]] for v in tri)
+                  face_normal = norm(cross(sub(p1, p0), sub(p2, p0)))
+                  for vi, ti, ni in tri:
+                      pos = positions[vi]
+                      uv = uvs[ti] if ti is not None else (0.0, 0.0)
+                      normal = norm(normals[ni]) if ni is not None else face_normal
+                      f.write(struct.pack("<8f", uv[0], uv[1],
+                                           *normal, *pos))
+                      count += 1
+              f.seek(8)
+              f.write(struct.pack("<I", count))
 
-                  for item in parts[1:]:
-                      values = item.split("/")
-                      vi = parse_index(values[0], len(positions))
-                      ti = parse_index(values[1], len(texcoords)) if len(values) > 1 else None
-                      ni = parse_index(values[2], len(normals)) if len(values) > 2 else None
+          size = out.stat().st_size
+          if size != 16 + count * 32:
+              raise SystemExit("Validação do tamanho do P3D falhou.")
+          with out.open("rb") as f:
+              magic, version, stored_count, stride = struct.unpack("<4sIII", f.read(16))
+          if (magic, version, stored_count, stride) != (b"AXP3", 1, count, 32):
+              raise SystemExit("Validação do cabeçalho P3D falhou.")
 
-                      if vi is None or vi < 0 or vi >= len(positions):
-                          raise ValueError("Índice de posição inválido no OBJ.")
+          report.write_text(
+              "# Relatório de conversão P3D\n\n"
+              f"- Origem: `{src}`\n- Saída: `{out}`\n"
+              f"- Formato: `AXP3`, versão `{version}`\n"
+              f"- Vértices: `{count}`\n- Triângulos: `{len(triangles)}`\n"
+              f"- Posições OBJ: `{len(positions)}`\n- UVs OBJ: `{len(uvs)}`\n"
+              f"- Normais OBJ: `{len(normals)}`\n- Stride: `{stride} bytes`\n"
+              f"- Tamanho: `{size} bytes`\n\n"
+              "Cada vértice contém 8 float32: U, V, normalX, normalY, normalZ, "
+              "posiçãoX, posiçãoY, posiçãoZ.\n\n"
+              "Limitações: formato intermédio personalizado; ainda não existe "
+              "carregador PSP. Não preserva esqueleto, pesos de ossos, animações "
+              "nem imagens de textura. UVs ausentes recebem zero e normais "
+              "ausentes são calculadas por triângulo.\n",
+              encoding="utf-8")
+          print(f"P3D criado: {out} ({count} vértices, {size} bytes)")
+          PY
 
-                      if ti is not None and not (0 <= ti < len(texcoords)):
-                          raise ValueError("Índice UV inválido no OBJ.")
-
-                      if ni is not None and not (0 <= ni < len(normals)):
-                          raise ValueError("Índice normal inválido no OBJ.")
-
-                      face.append((vi, ti, ni))
-
-                  for i in range(1, len(face) - 1):
-                      triangles.append((face[0], face[i], face[i + 1]))
-
-      if not positions or not triangles:
-          raise SystemExit("OBJ sem geometria utilizável.")
-
-      records = []
-
-      for triangle in triangles:
-          p0 = positions[triangle[0][0]]
-          p1 = positions[triangle[1][0]]
-          p2 = positions[triangle[2][0]]
-
-          a = tuple(p1[i] - p0[i] for i in range(3))
-          b = tuple(p2[i] - p0[i] for i in range(3))
-
-          face_normal = normalize((
-              a[1]*b[2] - a[2]*b[1],
-              a[2]*b[0] - a[0]*b[2],
-              a[0]*b[1] - a[1]*b[0]
-          ))
-
-          for vi, ti, ni in triangle:
-              u, v = texcoords[ti] if ti is not None else (0.0, 0.0)
-              nx, ny, nz = normals[ni] if ni is not None else face_normal
-              x, y, z = positions[vi]
-
-              records.append((u, v, nx, ny, nz, x, y, z))
-
-      vertex_count = len(records)
-      stride = 32
-
-      output.parent.mkdir(parents=True, exist_ok=True)
-
-      with output.open("wb") as file:
-          file.write(struct.pack("<4sIII", b"AXP3", 1, vertex_count, stride))
-
-          for record in records:
-              file.write(struct.pack("<8f", *record))
-
-      expected_size = 16 + vertex_count * stride
-
-      if output.stat().st_size != expected_size:
-          raise SystemExit("Tamanho do P3D inválido.")
-
-      print("Conversão concluída.")
-      print("Vértices:", vertex_count)
-      print("Tamanho:", output.stat().st_size, "bytes")
-      PY
-
-  - name: Validar ficheiro P3D
-    run: |
-      set -euo pipefail
-
-      python3 - <<'PY'
-      import struct
-      from pathlib import Path
-
-      path = Path("assets/characters/protagonist/converted/protagonist.p3d")
-
-      with path.open("rb") as file:
-          header = file.read(16)
-
-      if len(header) != 16:
-          raise SystemExit("Cabeçalho incompleto.")
-
-      magic, version, count, stride = struct.unpack("<4sIII", header)
-
-      if magic != b"AXP3":
-          raise SystemExit("Assinatura P3D inválida.")
-
-      if version != 1 or stride != 32 or count == 0:
-          raise SystemExit("Versão, estrutura ou quantidade inválida.")
-
-      expected = 16 + count * stride
-
-      if path.stat().st_size != expected:
-          raise SystemExit("Tamanho do ficheiro não corresponde ao cabeçalho.")
-
-      print("P3D validado.")
-      print("Versão:", version)
-      print("Vértices:", count)
-      print("Bytes por vértice:", stride)
-      print("Tamanho:", expected)
-      PY
-
-  - name: Criar relatório
-    run: |
-      python3 - <<'PY'
-      import struct
-      from pathlib import Path
-
-      path = Path("assets/characters/protagonist/converted/protagonist.p3d")
-
-      with path.open("rb") as file:
-          magic, version, count, stride = struct.unpack("<4sIII", file.read(16))
-
-      report = f"""# Protagonista P3D
-
-      - Origem: protagonist.obj
-      - Formato: AXP3
-      - Versão: {version}
-      - Vértices triangulados: {count}
-      - Bytes por vértice: {stride}
-      - Tamanho: {path.stat().st_size} bytes
-
-      ## Estrutura de cada vértice
-
-      - UV: 2 floats
-      - Normal: 3 floats
-      - Posição: 3 floats
-
-      ## Limitações
-
-      - Não inclui esqueleto nem animações.
-      - Não inclui texturas incorporadas.
-      - Ainda precisa de um carregador P3D no motor PSP.
-      - O personagem geométrico de teste permanece ativo.
-      """
-
-      Path("assets/characters/protagonist/converted/P3D-REPORT.md").write_text(
-          report, encoding="utf-8"
-      )
-      PY
-
-  - name: Guardar no GitHub
-    run: |
-      set -euo pipefail
-
-      git config user.name "github-actions[bot]"
-      git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      git add assets/characters/protagonist/converted/protagonist.p3d
-      git add assets/characters/protagonist/converted/P3D-REPORT.md
-
-      if git diff --cached --quiet; then
-        echo "Nenhuma alteração necessária."
-      else
-        git commit -m "assets: converter protagonista para formato P3D"
-        git push origin HEAD:main
-      fi
+      - name: Guardar resultado no repositório
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/characters/protagonist/converted/protagonist.p3d
+          git add assets/characters/protagonist/converted/P3D-REPORT.md
+          if git diff --cached --quiet; then
+            echo "Não existem alterações para guardar."
+            exit 0
+          fi
+          git commit -m "Convert protagonist OBJ to P3D"
+          git push origin HEAD:main
