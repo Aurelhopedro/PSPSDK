@@ -2,7 +2,7 @@
  * RPG Axel Digital
  * Criado por Axev Digital
  *
- * FASE 02 — Personagem e movimento.
+ * FASE 03 — Primeiro ambiente.
  */
 
 #include <pspkernel.h>
@@ -13,6 +13,7 @@
 #include "graphics/graphics.h"
 #include "graphics/camera.h"
 #include "graphics/player.h"
+#include "graphics/terrain.h"
 
 PSP_MODULE_INFO("RPG_AXEL_DIGITAL", 0, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
@@ -64,6 +65,9 @@ int main(void) {
 
     gfx_init();
 
+    /* Inicializar o terreno. */
+    terrain_init();
+
     Camera cam;
     camera_init(&cam);
 
@@ -87,10 +91,7 @@ int main(void) {
 
         player_update(&player, &pad, delta_time);
 
-        /*
-         * Câmara em terceira pessoa.
-         * Mantém-se atrás do personagem.
-         */
+        /* Câmara em terceira pessoa. */
         cam.pos.x = player.x -
                     5.0f * __builtin_sinf(player.yaw);
 
@@ -108,16 +109,13 @@ int main(void) {
         camera_apply_projection(&cam);
         camera_apply_view(&cam);
 
-        player_draw_ground();
+        /* Desenhar o ambiente e o personagem. */
+        terrain_draw();
         player_draw(&player);
 
         gfx_end_frame();
     }
 
-    /*
-     * Terminar o GU e sair.
-     * Não desligar manualmente o ecrã antes da saída.
-     */
     sceGuTerm();
     sceKernelExitGame();
 
