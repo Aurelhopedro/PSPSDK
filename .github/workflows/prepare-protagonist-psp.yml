@@ -1,123 +1,117 @@
 name: Preparar protagonista para PSP
 
 on:
-workflow_dispatch:
+  workflow_dispatch:
 
 permissions:
-contents: write
+  contents: write
 
 concurrency:
-group: prepare-protagonist-psp
-cancel-in-progress: false
+  group: prepare-protagonist-psp
+  cancel-in-progress: false
 
 jobs:
-convert-protagonist:
-runs-on: ubuntu-latest
+  convert-protagonist:
+    runs-on: ubuntu-latest
 
-steps:
-  - name: Obter repositório
-    uses: actions/checkout@v4
-    with:
-      ref: main
+    steps:
+      - name: Obter repositório
+        uses: actions/checkout@v4
+        with:
+          ref: main
 
-  - name: Verificar ficheiro original
-    run: |
-      set -euo pipefail
-      MODEL="assets/characters/protagonist/source/protagonist.glb"
-      test -s "$MODEL"
-      test -s "assets/characters/protagonist/LICENSE.txt"
-      test -s "assets/characters/protagonist/SOURCE.md"
-      echo "Modelo original, licença e origem encontrados."
-      ls -lh "$MODEL"
+      - name: Verificar ficheiro original
+        run: |
+          set -euo pipefail
+          MODEL="assets/characters/protagonist/source/protagonist.glb"
+          test -s "$MODEL"
+          test -s "assets/characters/protagonist/LICENSE.txt"
+          test -s "assets/characters/protagonist/SOURCE.md"
+          echo "Modelo original, licença e origem encontrados."
+          ls -lh "$MODEL"
 
-  - name: Instalar conversor
-    run: |
-      sudo apt-get update
-      sudo apt-get install -y assimp-utils
+      - name: Instalar conversor
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y assimp-utils
 
-  - name: Inspecionar GLB original
-    run: |
-      set -euo pipefail
-      assimp info assets/characters/protagonist/source/protagonist.glb \
-        | tee /tmp/protagonist-assimp-info.txt
+      - name: Inspecionar GLB original
+        run: |
+          set -euo pipefail
+          assimp info assets/characters/protagonist/source/protagonist.glb
 
-  - name: Converter para malha estática OBJ
-    run: |
-      set -euo pipefail
-      mkdir -p assets/characters/protagonist/converted
+      - name: Converter para OBJ
+        run: |
+          set -euo pipefail
+          mkdir -p assets/characters/protagonist/converted
 
-      assimp export \
-        assets/characters/protagonist/source/protagonist.glb \
-        assets/characters/protagonist/converted/protagonist.obj \
-        -fobj
+          assimp export \
+            assets/characters/protagonist/source/protagonist.glb \
+            assets/characters/protagonist/converted/protagonist.obj \
+            -fobj
 
-      test -s assets/characters/protagonist/converted/protagonist.obj
+          test -s assets/characters/protagonist/converted/protagonist.obj
 
-  - name: Validar geometria convertida
-    run: |
-      set -euo pipefail
-      python3 - <<'PY'
-      from pathlib import Path
+      - name: Validar geometria
+        run: |
+          set -euo pipefail
 
-      obj = Path("assets/characters/protagonist/converted/protagonist.obj")
-      text = obj.read_text(encoding="utf-8", errors="replace")
+          python3 - <<'PY'
+          from pathlib import Path
 
-      vertices = sum(line.startswith("v ") for line in text.splitlines())
-      normals = sum(line.startswith("vn ") for line in text.splitlines())
-      uvs = sum(line.startswith("vt ") for line in text.splitlines())
-      faces = sum(line.startswith("f ") for line in text.splitlines())
+          path = Path("assets/characters/protagonist/converted/protagonist.obj")
+          lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
 
-      print(f"Vértices: {vertices}")
-      print(f"Normais: {normals}")
-      print(f"Coordenadas UV: {uvs}")
-      print(f"Faces: {faces}")
+          vertices = sum(line.startswith("v ") for line in lines)
+          normals = sum(line.startswith("vn ") for line in lines)
+          uvs = sum(line.startswith("vt ") for line in lines)
+          faces = sum(line.startswith("f ") for line in lines)
 
-      if vertices == 0 or faces == 0:
-          raise SystemExit("A conversão não produziu uma malha OBJ válida.")
+          print("Vértices:", vertices)
+          print("Normais:", normals)
+          print("Coordenadas UV:", uvs)
+          print("Faces:", faces)
 
-      report = f"""# Preparação do protagonista para PSP
+          if vertices == 0 or faces == 0:
+              raise SystemExit("A conversão não produziu uma malha OBJ válida.")
 
-      Modelo original: ../source/protagonist.glb
+          report = f"""# Conversão do protagonista
 
-      Formato intermédio: Wavefront OBJ
-      Conversor: Assimp
+          Modelo original: ../source/protagonist.glb
 
-      Vértices: {vertices}
-      Normais: {normals}
-      Coordenadas UV: {uvs}
-      Faces: {faces}
+          Formato convertido: OBJ
+          Vértices: {vertices}
+          Normais: {normals}
+          Coordenadas UV: {uvs}
+          Faces: {faces}
 
-      ## Limitações
+          ## Limitações
 
-      - O GLB original foi preservado.
-      - OBJ é uma malha estática.
-      - Esqueleto e animações não são preservados nesta conversão.
-      - O OBJ ainda não é o formato binário final do motor PSP.
-      - O jogo ainda não foi alterado para carregar este modelo.
-      - O personagem de teste continua ativo.
+          - O GLB original foi preservado.
+          - OBJ representa uma malha estática.
+          - Esqueleto e animações precisam de tratamento separado.
+          - O OBJ ainda não é o formato final do motor PSP.
+          - O jogo ainda não carrega este modelo.
+          - O personagem de teste permanece ativo.
+          """
 
-      ## Próxima etapa
+          Path("assets/characters/protagonist/converted/CONVERSION-REPORT.md").write_text(
+              report, encoding="utf-8"
+          )
+          PY
 
-      Implementar e testar o carregador de modelos no motor PSP.
-      Só depois substituir o personagem geométrico de teste.
-      """
+      - name: Guardar conversão no GitHub
+        run: |
+          set -euo pipefail
 
-      Path("assets/characters/protagonist/converted/CONVERSION-REPORT.md").write_text(
-          report, encoding="utf-8"
-      )
-      PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-  - name: Guardar conversão no GitHub
-    run: |
-      set -euo pipefail
-      git config user.name "github-actions[bot]"
-      git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/characters/protagonist/converted/
 
-      git add assets/characters/protagonist/converted/
-
-      if git diff --cached --quiet; then
-        echo "A conversão já está atualizada."
-      else
-        git commit -m "assets: preparar protagonista em formato OBJ"
-        git push origin HEAD:main
-      fi
+          if git diff --cached --quiet; then
+            echo "Nenhuma alteração necessária."
+          else
+            git commit -m "assets: preparar protagonista em formato OBJ"
+            git push origin HEAD:main
+          fi
