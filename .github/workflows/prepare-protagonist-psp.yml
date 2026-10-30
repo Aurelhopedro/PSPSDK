@@ -1,0 +1,123 @@
+name: Preparar protagonista para PSP
+
+on:
+workflow_dispatch:
+
+permissions:
+contents: write
+
+concurrency:
+group: prepare-protagonist-psp
+cancel-in-progress: false
+
+jobs:
+convert-protagonist:
+runs-on: ubuntu-latest
+
+steps:
+  - name: Obter repositório
+    uses: actions/checkout@v4
+    with:
+      ref: main
+
+  - name: Verificar ficheiro original
+    run: |
+      set -euo pipefail
+      MODEL="assets/characters/protagonist/source/protagonist.glb"
+      test -s "$MODEL"
+      test -s "assets/characters/protagonist/LICENSE.txt"
+      test -s "assets/characters/protagonist/SOURCE.md"
+      echo "Modelo original, licença e origem encontrados."
+      ls -lh "$MODEL"
+
+  - name: Instalar conversor
+    run: |
+      sudo apt-get update
+      sudo apt-get install -y assimp-utils
+
+  - name: Inspecionar GLB original
+    run: |
+      set -euo pipefail
+      assimp info assets/characters/protagonist/source/protagonist.glb \
+        | tee /tmp/protagonist-assimp-info.txt
+
+  - name: Converter para malha estática OBJ
+    run: |
+      set -euo pipefail
+      mkdir -p assets/characters/protagonist/converted
+
+      assimp export \
+        assets/characters/protagonist/source/protagonist.glb \
+        assets/characters/protagonist/converted/protagonist.obj \
+        -fobj
+
+      test -s assets/characters/protagonist/converted/protagonist.obj
+
+  - name: Validar geometria convertida
+    run: |
+      set -euo pipefail
+      python3 - <<'PY'
+      from pathlib import Path
+
+      obj = Path("assets/characters/protagonist/converted/protagonist.obj")
+      text = obj.read_text(encoding="utf-8", errors="replace")
+
+      vertices = sum(line.startswith("v ") for line in text.splitlines())
+      normals = sum(line.startswith("vn ") for line in text.splitlines())
+      uvs = sum(line.startswith("vt ") for line in text.splitlines())
+      faces = sum(line.startswith("f ") for line in text.splitlines())
+
+      print(f"Vértices: {vertices}")
+      print(f"Normais: {normals}")
+      print(f"Coordenadas UV: {uvs}")
+      print(f"Faces: {faces}")
+
+      if vertices == 0 or faces == 0:
+          raise SystemExit("A conversão não produziu uma malha OBJ válida.")
+
+      report = f"""# Preparação do protagonista para PSP
+
+      Modelo original: ../source/protagonist.glb
+
+      Formato intermédio: Wavefront OBJ
+      Conversor: Assimp
+
+      Vértices: {vertices}
+      Normais: {normals}
+      Coordenadas UV: {uvs}
+      Faces: {faces}
+
+      ## Limitações
+
+      - O GLB original foi preservado.
+      - OBJ é uma malha estática.
+      - Esqueleto e animações não são preservados nesta conversão.
+      - O OBJ ainda não é o formato binário final do motor PSP.
+      - O jogo ainda não foi alterado para carregar este modelo.
+      - O personagem de teste continua ativo.
+
+      ## Próxima etapa
+
+      Implementar e testar o carregador de modelos no motor PSP.
+      Só depois substituir o personagem geométrico de teste.
+      """
+
+      Path("assets/characters/protagonist/converted/CONVERSION-REPORT.md").write_text(
+          report, encoding="utf-8"
+      )
+      PY
+
+  - name: Guardar conversão no GitHub
+    run: |
+      set -euo pipefail
+      git config user.name "github-actions[bot]"
+      git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      git add assets/characters/protagonist/converted/
+
+      if git diff --cached --quiet; then
+        echo "A conversão já está atualizada."
+      else
+        git commit -m "assets: preparar protagonista em formato OBJ"
+        git push origin HEAD:main
+      fi
