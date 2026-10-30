@@ -130,10 +130,8 @@ steps:
       output.parent.mkdir(parents=True, exist_ok=True)
 
       with output.open("wb") as file:
-          # Cabeçalho: magic, versão, vértices, bytes por vértice.
           file.write(struct.pack("<4sIII", b"AXP3", 1, vertex_count, stride))
 
-          # Cada vértice: UV(2), normal(3), posição(3).
           for record in records:
               file.write(struct.pack("<8f", *record))
 
