@@ -1,13 +1,14 @@
 # RPG Axel Digital
 # Criado por Axev Digital
-# FASE 02 — Personagem e movimento
+# FASE 03 — Primeiro ambiente
 
 TARGET = rpg_axel_digital
 
 OBJS = src/main.o \
        src/graphics/graphics.o \
        src/graphics/camera.o \
-       src/graphics/player.o
+       src/graphics/player.o \
+       src/graphics/terrain.o
 
 PSP_EBOOT_TITLE = RPG Axel Digital
 
