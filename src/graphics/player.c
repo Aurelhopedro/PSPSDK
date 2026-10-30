@@ -20,8 +20,7 @@ typedef struct {
     float x;
     float y;
     float z;
-} __attribute__((aligned(16))) Vertex;
-
+} Vertex;
 /* Cubo unitário com seis faces. */
 static Vertex __attribute__((aligned(16))) box_vertices[] = {
     /* Frente */
