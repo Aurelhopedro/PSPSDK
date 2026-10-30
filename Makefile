@@ -6,20 +6,23 @@
 TARGET      = psp_rpg
 OBJS        = src/main.o
 
-# Título e versão exibidos no XMB da PSP
-TITLE       = PSP RPG 3D
-PSP_EBOOT_TITLE = $(TITLE)
-PSP_EBOOT   = EBOOT.PBP
+# Título exibido no XMB da PSP
+PSP_EBOOT_TITLE = PSP RPG 3D
 
 # Flags do compilador
 CFLAGS      = -O2 -G0 -Wall -DPSP
 CXXFLAGS    = $(CFLAGS) -fno-exceptions -fno-rtti
 ASFLAGS     = $(CFLAGS)
 
-# Bibliotecas PSP necessárias para fase inicial
-LIBS        = -lpspdisplay -lpspge -lpspctrl -lpspsdk -lc -lpspnet \
-              -lpspnet_inet -lpspnet_apctl -lm
+# Bibliotecas PSP para fase inicial
+LIBS        = -lpspdisplay -lpspge -lpspctrl -lpspsdk -lc -lm
 
-# Incluir sistema de build do PSPSDK
-PSPSDK      = $(shell psp-config --pspsdk-path)
-include     $(PSPSDK)/lib/build.mak
+# Localizar PSPSDK automaticamente via psp-config
+# O container pspdev/pspdev já tem psp-config no PATH
+PSPSDK     ?= $(shell psp-config --pspsdk-path 2>/dev/null)
+
+ifndef PSPSDK
+  $(error PSPSDK nao encontrado. Instala pspdev ou define PSPDEV no ambiente.)
+endif
+
+include $(PSPSDK)/lib/build.mak
