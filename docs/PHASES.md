@@ -1,4 +1,4 @@
-# Plano de Fases — PSP RPG 3D
+# Plano de Fases — RPG Axel Digital
 
 ## FASE 00 — Fundação ✅
 - [x] Repositório GitHub criado
@@ -13,15 +13,23 @@
 ---
 
 ## FASE 01 — Motor Gráfico ⏳
-- [ ] Inicialização do sistema GU (Graphics Utility)
-- [ ] Setup do framebuffer e double buffering
-- [ ] Renderização de triângulos 3D básicos
-- [ ] Sistema de câmara (posição, alvo, up vector)
-- [ ] Matriz de projeção perspetiva
-- [ ] Teste de profundidade (Z-buffer)
-- [ ] Iluminação direcional básica
+- [x] Inicialização do sistema GU (`sceGuInit`, display list, `sceGuFinish`, `sceGuSync`)
+- [x] Setup do framebuffer e double buffering (VRAM_FB0 / VRAM_FB1)
+- [x] Z-buffer configurado (VRAM_DEPTH, `sceGuDepthFunc`, `sceGuEnable(GU_DEPTH_TEST)`)
+- [x] Viewport e scissor configurados para 480×272
+- [x] Sistema de câmara (`camera.h` / `camera.c`) com posição, alvo e up vector
+- [x] Matriz de projeção perspetiva via `sceGumPerspective` (FOV 75°, aspect 480/272)
+- [x] Matriz de visualização via `sceGumLookAt`
+- [x] Cubo 3D com 36 vértices, 6 faces coloridas (`cube.h` / `cube.c`)
+- [x] Rotação contínua nos eixos X, Y, Z via `sceGumRotate`
+- [x] Ciclo de renderização: limpar → matrizes → desenhar → swap
+- [x] Botão X preservado para sair
 
-**Critério de saída**: cubo 3D rotativo visível no ecrã a 30+ FPS.
+**Pendente**:
+- [ ] Compilação confirmada via GitHub Actions
+- [ ] Teste visual confirmado no PPSSPP
+
+**Critério de saída**: cubo 3D rotativo e colorido visível no PPSSPP.
 
 ---
 
