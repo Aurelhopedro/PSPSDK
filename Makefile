@@ -1,25 +1,32 @@
 # ============================================================
-# Makefile — PSP RPG 3D
+# Makefile — RPG Axel Digital
+# Criado por Axev Digital
 # Compatível com PSPSDK (pspdev toolchain)
 # ============================================================
 
-TARGET      = psp_rpg
-OBJS        = src/main.o
+TARGET          = rpg_axel_digital
+OBJS            = src/main.o
 
-# Título exibido no XMB da PSP
-PSP_EBOOT_TITLE = PSP RPG 3D
+# Identidade do jogo
+PSP_EBOOT_TITLE = RPG Axel Digital
 
 # Flags do compilador
-CFLAGS      = -O2 -G0 -Wall -DPSP
-CXXFLAGS    = $(CFLAGS) -fno-exceptions -fno-rtti
-ASFLAGS     = $(CFLAGS)
+CFLAGS          = -O2 -G0 -Wall -DPSP
+CXXFLAGS        = $(CFLAGS) -fno-exceptions -fno-rtti
+ASFLAGS         = $(CFLAGS)
 
-# Bibliotecas PSP para fase inicial
-LIBS        = -lpspdisplay -lpspge -lpspctrl -lpspsdk -lc -lm
+# Bibliotecas PSP necessárias:
+# - pspdisplay  : sceDisplaySetMode, sceDisplaySetFrameBuf, sceDisplayWaitVblankStart
+# - pspge       : Graphics Engine (necessário para display)
+# - pspctrl     : sceCtrlReadBufferPositive, sceCtrlSetSamplingMode
+# - pspdebug    : pspDebugScreenInitEx, pspDebugScreenPrintf (OBRIGATÓRIO para texto)
+# - pspkernel   : incluído via pspkernel.h / pspkubridge implícito em pspsdk
+# - pspsdk      : runtime PSP (callbacks, threads)
+# - c, m        : libc e libm standard
+LIBS            = -lpspdisplay -lpspge -lpspctrl -lpspdebug -lpspsdk -lc -lm
 
-# Localizar PSPSDK automaticamente via psp-config
-# O container pspdev/pspdev já tem psp-config no PATH
-PSPSDK     ?= $(shell psp-config --pspsdk-path 2>/dev/null)
+# Localizar PSPSDK via psp-config (funciona no container pspdev/pspdev)
+PSPSDK         ?= $(shell psp-config --pspsdk-path 2>/dev/null)
 
 ifndef PSPSDK
   $(error PSPSDK nao encontrado. Instala pspdev ou define PSPDEV no ambiente.)
