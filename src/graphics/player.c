@@ -3,6 +3,7 @@
  * Criado por Axev Digital
  *
  * FASE 02: Personagem 3D, movimento, gravidade e animação.
+ * FASE 03: Limites do terreno (clamp).
  */
 
 #include "player.h"
@@ -15,6 +16,10 @@
 #define MOVE_SPEED 2.5f
 #define GRAVITY 9.8f
 #define JUMP_FORCE 4.5f
+
+/* O terreno tem 100x100 unidades centradas em 0,0.
+   Usamos 48 como limite (margem de 2 unidades antes da borda). */
+#define TERRAIN_LIMIT 48.0f
 
 typedef struct {
     float x;
@@ -149,6 +154,12 @@ void player_update(
     } else {
         player->walk_time = 0.0f;
     }
+
+    /* Limites do terreno: impedir saída da área explorável. */
+    if (player->x >  TERRAIN_LIMIT) player->x =  TERRAIN_LIMIT;
+    if (player->x < -TERRAIN_LIMIT) player->x = -TERRAIN_LIMIT;
+    if (player->z >  TERRAIN_LIMIT) player->z =  TERRAIN_LIMIT;
+    if (player->z < -TERRAIN_LIMIT) player->z = -TERRAIN_LIMIT;
 
     /* Salto: botão Círculo. */
     if ((pad->Buttons & PSP_CTRL_CIRCLE) && player->grounded) {
