@@ -1,18 +1,21 @@
 name: Converter protagonista para P3D
 
 on:
-workflow_dispatch:
+  workflow_dispatch:
 
 permissions:
-contents: write
+  contents: write
 
 concurrency:
-group: convert-protagonist-p3d
-cancel-in-progress: false
+  group: convert-protagonist-p3d
+  cancel-in-progress: false
 
 jobs:
-convert:
-runs-on: ubuntu-latest
+  convert:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Obter repositório
+        uses: actions/checkout@v4
 
 steps:
   - name: Obter repositório
