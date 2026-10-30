@@ -1,205 +1,392 @@
 name: Importar biblioteca 3D do RPG
 
 on:
-workflow_dispatch:
+  workflow_dispatch:
 
 permissions:
-contents: write
+  contents: write
 
 concurrency:
-group: import-3d-library
-cancel-in-progress: false
+  group: import-3d-library
+  cancel-in-progress: false
 
 jobs:
-import-library:
-runs-on: ubuntu-latest
-steps:
-- name: Obter o repositório do jogo
-uses: actions/checkout@v4
-with:
-ref: main
+  import-library:
+    runs-on: ubuntu-latest
 
-  - name: Preparar pastas
-    run: |
-      mkdir -p assets/characters/creatures/gobkit
-      mkdir -p assets/characters/animals/gobkit
-      mkdir -p assets/environment/nature/gobkit
-      mkdir -p assets/environment/kenney
-      mkdir -p assets/source
+    steps:
+      - name: Obter o repositório
+        uses: actions/checkout@v4
+        with:
+          ref: main
 
-  - name: Descarregar fontes fixadas
-    run: |
-      set -euo pipefail
-      mkdir -p /tmp/asset-sources
-      curl -fL --retry 3 "https://codeload.github.com/Ariescar/gobkit-free-assets/zip/4e73c68fa6e8ca9d948fcc0ce7215c830a022c3b" -o /tmp/asset-sources/gobkit.zip
-      curl -fL --retry 3 "https://codeload.github.com/syuhei176/ai-game-assets/zip/ebfd758dea8db5793c765cc72564efadb36a4ed0" -o /tmp/asset-sources/kenney.zip
-      unzip -q /tmp/asset-sources/gobkit.zip -d /tmp/asset-sources/gobkit
-      unzip -q /tmp/asset-sources/kenney.zip -d /tmp/asset-sources/kenney
+      - name: Preparar pastas
+        run: |
+          mkdir -p assets/characters/creatures/gobkit
+          mkdir -p assets/characters/animals/gobkit
+          mkdir -p assets/environment/nature/gobkit
+          mkdir -p assets/environment/kenney
+          mkdir -p assets/source/glb-audit
 
-  - name: Importar e validar modelos selecionados
-    run: |
-      python3 - <<'PY'
-      from pathlib import Path
-      import hashlib
-      import struct
+      - name: Descarregar fontes fixadas
+        run: |
+          set -euo pipefail
 
-      root = Path.cwd()
-      gobkit = next(Path("/tmp/asset-sources/gobkit").glob("gobkit-free-assets-*"))
-      kenney = next(Path("/tmp/asset-sources/kenney").glob("ai-game-assets-*"))
-      copied = []
+          mkdir -p /tmp/asset-sources/gobkit
+          mkdir -p /tmp/asset-sources/kenney
 
-      def install(src, dst):
-          dst.parent.mkdir(parents=True, exist_ok=True)
-          data = src.read_bytes()
-          digest = hashlib.sha256(data).hexdigest()
+          curl -fL --retry 3 \
+            "https://codeload.github.com/Ariescar/gobkit-free-assets/zip/4e73c68fa6e8ca9d948fcc0ce7215c830a022c3b" \
+            -o /tmp/gobkit.zip
 
-          if dst.exists():
-              old = hashlib.sha256(dst.read_bytes()).hexdigest()
-              if old != digest:
-                  raise SystemExit(f"ABORTADO: ficheiro existente diferente: {dst}")
-              return
+          curl -fL --retry 3 \
+            "https://codeload.github.com/syuhei176/ai-game-assets/zip/ebfd758dea8db5793c765cc72564efadb36a4ed0" \
+            -o /tmp/kenney.zip
 
-          dst.write_bytes(data)
-          copied.append((str(dst.relative_to(root)), len(data), digest))
+          unzip -q /tmp/gobkit.zip -d /tmp/asset-sources/gobkit
+          unzip -q /tmp/kenney.zip -d /tmp/asset-sources/kenney
 
-      def install_glb(src, dst):
-          data = src.read_bytes()
+      - name: Importar e analisar modelos GLB
+        run: |
+          cat > /tmp/import_assets.py <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import struct
 
-          if len(data) < 12:
-              raise SystemExit(f"GLB incompleto: {src}")
+          root = Path.cwd()
 
-          magic, version, declared = struct.unpack("<4sII", data[:12])
+          gobkit = next(
+              Path("/tmp/asset-sources/gobkit").glob("gobkit-free-assets-*")
+          )
 
-          if magic != b"glTF" or version != 2 or declared != len(data):
-              raise SystemExit(f"GLB inválido: {src}")
+          kenney = next(
+              Path("/tmp/asset-sources/kenney").glob("ai-game-assets-*")
+          )
 
-          install(src, dst)
+          copied = []
+          audits = []
 
-      # 8 criaturas.
-      for src in sorted((gobkit / "minion").glob("*.glb")):
-          install_glb(src, root / "assets/characters/creatures/gobkit" / src.name)
+          def install(src, dst):
+              data = src.read_bytes()
+              digest = hashlib.sha256(data).hexdigest()
 
-      # 10 animais animados.
-      for src in sorted((gobkit / "animal").glob("*.glb")):
-          install_glb(src, root / "assets/characters/animals/gobkit" / src.name)
+              dst.parent.mkdir(parents=True, exist_ok=True)
 
-      for src in sorted((gobkit / "animal").glob("*.png")):
-          install(src, root / "assets/characters/animals/gobkit" / src.name)
+              if dst.exists():
+                  old = hashlib.sha256(dst.read_bytes()).hexdigest()
 
-      # Modelos de natureza.
-      for src in sorted((gobkit / "nature").glob("*.glb")):
-          install_glb(src, root / "assets/environment/nature/gobkit" / src.name)
+                  if old != digest:
+                      raise SystemExit(
+                          f"Destino existente com conteúdo diferente: {dst}"
+                      )
 
-      # Preservar licença e documentação originais.
-      install(gobkit / "LICENSE", root / "assets/characters/creatures/gobkit/LICENSE.txt")
-      install(gobkit / "README.md", root / "assets/characters/creatures/gobkit/UPSTREAM-README.md")
-      install(gobkit / "INTEGRATION.md", root / "assets/characters/creatures/gobkit/INTEGRATION.md")
+                  return
 
-      # Modelos Kenney: árvores, rochas e uma casa.
-      source_dir = kenney / "models" / "environment"
+              dst.write_bytes(data)
 
-      selected = [
-          "tree_pine.glb",
-          "tree_oak.glb",
-          "tree_palm.glb",
-          "rock_large.glb",
-          "rock_medium.glb",
-          "rock_small.glb",
-          "building_house.glb"
-      ]
+              copied.append((
+                  str(dst.relative_to(root)),
+                  len(data),
+                  digest
+              ))
 
-      for name in selected:
-          src = source_dir / name
+          def inspect_glb(src, dst):
+              data = src.read_bytes()
 
-          if not src.is_file():
-              raise SystemExit(f"Modelo esperado ausente: {name}")
+              if len(data) < 20:
+                  raise SystemExit(f"GLB incompleto: {src}")
 
-          install_glb(src, root / "assets/environment/kenney" / name)
+              magic, version, declared = struct.unpack(
+                  "<4sII", data[:12]
+              )
 
-      source_note = """# Modelos de ambiente Kenney
+              if magic != b"glTF" or version != 2:
+                  raise SystemExit(f"GLB inválido: {src}")
 
-      Origem: https://github.com/syuhei176/ai-game-assets
-      Commit fixado: ebfd758dea8db5793c765cc72564efadb36a4ed0
-      Fontes declaradas: Kenney Nature Kit e Kenney City Kit.
-      Licença declarada pela fonte: CC0.
-      Página do criador: https://kenney.nl
+              if declared != len(data):
+                  raise SystemExit(f"Tamanho GLB inválido: {src}")
 
-      Importados: 3 árvores, 3 rochas e 1 casa.
-      Os GLB ainda precisam de avaliação e otimização para PSP.
-      """
+              chunk_length, chunk_type = struct.unpack(
+                  "<II", data[12:20]
+              )
 
-      note = root / "assets/environment/kenney/SOURCE.md"
+              if chunk_type != 0x4E4F534A:
+                  raise SystemExit(f"GLB sem bloco JSON: {src}")
 
-      if not note.exists():
-          note.write_text(source_note, encoding="utf-8")
+              json_end = 20 + chunk_length
 
-      report = [
-          "# Relatório da biblioteca 3D",
-          "",
-          "Fontes fixadas; nenhum ficheiro do código do jogo foi alterado.",
-          "",
-          "Gobkit CC0: https://github.com/Ariescar/gobkit-free-assets",
-          "Commit: 4e73c68fa6e8ca9d948fcc0ce7215c830a022c3b",
-          "Kenney CC0 (conforme declarado pela fonte): https://github.com/syuhei176/ai-game-assets",
-          "Commit: ebfd758dea8db5793c765cc72564efadb36a4ed0",
-          "",
-          "## Ficheiros novos nesta execução"
-      ]
+              if json_end > len(data):
+                  raise SystemExit(f"Bloco JSON incompleto: {src}")
 
-      report.extend(
-          f"- {path} | {size} bytes | SHA-256: {digest}"
-          for path, size, digest in copied
-      )
+              document = json.loads(
+                  data[20:json_end].decode("utf-8").rstrip(" \t\r\n\0")
+              )
 
-      report += ["", f"Total de ficheiros novos: {len(copied)}"]
+              meshes = document.get("meshes", [])
+              primitives = sum(
+                  len(mesh.get("primitives", []))
+                  for mesh in meshes
+              )
 
-      (root / "assets/source/IMPORT-REPORT.md").write_text(
-          "\n".join(report) + "\n",
-          encoding="utf-8"
-      )
+              accessors = document.get("accessors", [])
+              vertices = sum(
+                  accessor.get("count", 0)
+                  for accessor in accessors
+                  if accessor.get("type") == "VEC3"
+              )
 
-      print(f"Importação validada. Ficheiros novos: {len(copied)}")
-      PY
+              skins = document.get("skins", [])
+              animations = document.get("animations", [])
+              materials = document.get("materials", [])
+              images = document.get("images", [])
+              nodes = document.get("nodes", [])
 
-  - name: Registar catálogo de fontes e licenças
-    run: |
-      cat > assets/source/ASSET-SOURCES.md <<'EOF'
-      # Catálogo de fontes de recursos 3D
+              triangles = 0
 
-      ## Gobkit — CC0 1.0
-      Repositório: https://github.com/Ariescar/gobkit-free-assets
-      Commit: 4e73c68fa6e8ca9d948fcc0ce7215c830a022c3b
-      Conteúdo: criaturas, animais e modelos de natureza.
-      A licença original foi preservada em assets/characters/creatures/gobkit/LICENSE.txt.
+              for mesh in meshes:
+                  for primitive in mesh.get("primitives", []):
+                      index = primitive.get("indices")
 
-      ## Kenney — CC0 conforme declarado pela fonte
-      Repositório: https://github.com/syuhei176/ai-game-assets
-      Commit: ebfd758dea8db5793c765cc72564efadb36a4ed0
-      Conteúdo: árvores, rochas e uma casa.
-      A origem e a licença declarada estão em assets/environment/kenney/SOURCE.md.
+                      if index is not None and index < len(accessors):
+                          count = accessors[index].get("count", 0)
+                          triangles += count // 3
 
-      ## Limitações
-      Os modelos GLB são ficheiros-fonte, não modelos prontos para PSP.
-      Esta workflow não converte, não integra no motor e não altera código C/C++.
-      Cada modelo deverá ser avaliado e otimizado antes de ser usado no jogo.
-      EOF
+              install(src, dst)
 
-  - name: Guardar recursos no GitHub
-    run: |
-      set -euo pipefail
+              audits.append({
+                  "file": str(dst.relative_to(root)),
+                  "bytes": len(data),
+                  "sha256": hashlib.sha256(data).hexdigest(),
+                  "meshes": len(meshes),
+                  "primitives": primitives,
+                  "nodes": len(nodes),
+                  "materials": len(materials),
+                  "images": len(images),
+                  "skins": len(skins),
+                  "animations": len(animations),
+                  "accessors": len(accessors),
+                  "position_accessor_count_sum": vertices,
+                  "indexed_triangle_estimate": triangles
+              })
 
-      git config user.name "github-actions[bot]"
-      git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Criaturas Gobkit.
+          for src in sorted((gobkit / "minion").glob("*.glb")):
+              inspect_glb(
+                  src,
+                  root / "assets/characters/creatures/gobkit" / src.name
+              )
 
-      git add assets/characters/creatures/gobkit/
-      git add assets/characters/animals/gobkit/
-      git add assets/environment/nature/gobkit/
-      git add assets/environment/kenney/
-      git add assets/source/
+          # Animais Gobkit.
+          for src in sorted((gobkit / "animal").glob("*.glb")):
+              inspect_glb(
+                  src,
+                  root / "assets/characters/animals/gobkit" / src.name
+              )
 
-      if git diff --cached --quiet; then
-        echo "Nenhum recurso novo. A versão já está no repositório."
-      else
-        git commit -m "assets: importar biblioteca 3D CC0"
-        git push origin HEAD:main
-      fi
+          for src in sorted((gobkit / "animal").glob("*.png")):
+              install(
+                  src,
+                  root / "assets/characters/animals/gobkit" / src.name
+              )
+
+          # Natureza Gobkit.
+          for src in sorted((gobkit / "nature").glob("*.glb")):
+              inspect_glb(
+                  src,
+                  root / "assets/environment/nature/gobkit" / src.name
+              )
+
+          # Documentação e licença Gobkit.
+          install(
+              gobkit / "LICENSE",
+              root / "assets/characters/creatures/gobkit/LICENSE.txt"
+          )
+
+          install(
+              gobkit / "README.md",
+              root / "assets/characters/creatures/gobkit/UPSTREAM-README.md"
+          )
+
+          install(
+              gobkit / "INTEGRATION.md",
+              root / "assets/characters/creatures/gobkit/INTEGRATION.md"
+          )
+
+          # Ambiente Kenney.
+          kenney_dir = kenney / "models" / "environment"
+
+          selected = [
+              "tree_pine.glb",
+              "tree_oak.glb",
+              "tree_palm.glb",
+              "rock_large.glb",
+              "rock_medium.glb",
+              "rock_small.glb",
+              "building_house.glb"
+          ]
+
+          for name in selected:
+              src = kenney_dir / name
+
+              if not src.is_file():
+                  raise SystemExit(
+                      f"Modelo Kenney não encontrado: {name}"
+                  )
+
+              inspect_glb(
+                  src,
+                  root / "assets/environment/kenney" / name
+              )
+
+          # Origem dos modelos Kenney.
+          source_note = """# Modelos Kenney
+
+          Repositório:
+          https://github.com/syuhei176/ai-game-assets
+
+          Commit:
+          ebfd758dea8db5793c765cc72564efadb36a4ed0
+
+          Licença CC0 conforme declarada pela fonte.
+
+          Conteúdo:
+          3 árvores, 3 rochas e 1 casa.
+
+          Os modelos ainda precisam de otimização para PSP.
+          """
+
+          note = root / "assets/environment/kenney/SOURCE.md"
+
+          if not note.exists():
+              note.write_text(source_note, encoding="utf-8")
+
+          # Relatório de importação.
+          report = [
+              "# Relatório de importação 3D",
+              "",
+              "## Fontes",
+              "",
+              "Gobkit: https://github.com/Ariescar/gobkit-free-assets",
+              "Commit: 4e73c68fa6e8ca9d948fcc0ce7215c830a022c3b",
+              "",
+              "Kenney: https://github.com/syuhei176/ai-game-assets",
+              "Commit: ebfd758dea8db5793c765cc72564efadb36a4ed0",
+              "",
+              "## Ficheiros novos"
+          ]
+
+          report.extend(
+              f"- {path} | {size} bytes | SHA-256: {digest}"
+              for path, size, digest in copied
+          )
+
+          report += [
+              "",
+              f"Total de ficheiros novos: {len(copied)}"
+          ]
+
+          (root / "assets/source/IMPORT-REPORT.md").write_text(
+              "\n".join(report) + "\n",
+              encoding="utf-8"
+          )
+
+          # Relatório técnico para preparar a conversão PSP.
+          audit_report = [
+              "# Auditoria técnica dos modelos GLB",
+              "",
+              "Este relatório prepara a futura conversão para PSP.",
+              "Não significa que os modelos já estejam prontos para o jogo.",
+              ""
+          ]
+
+          for item in audits:
+              audit_report.extend([
+                  f"## {item['file']}",
+                  f"- Tamanho: {item['bytes']} bytes",
+                  f"- SHA-256: {item['sha256']}",
+                  f"- Malhas: {item['meshes']}",
+                  f"- Primitivas: {item['primitives']}",
+                  f"- Nós: {item['nodes']}",
+                  f"- Materiais: {item['materials']}",
+                  f"- Imagens: {item['images']}",
+                  f"- Esqueletos (skins): {item['skins']}",
+                  f"- Animações: {item['animations']}",
+                  f"- Accessors: {item['accessors']}",
+                  f"- Soma de contagens de accessors VEC3: {item['position_accessor_count_sum']}",
+                  f"- Estimativa de triângulos indexados: {item['indexed_triangle_estimate']}",
+                  ""
+              ])
+
+          (root / "assets/source/glb-audit/GLB-AUDIT.md").write_text(
+              "\n".join(audit_report) + "\n",
+              encoding="utf-8"
+          )
+
+          (root / "assets/source/glb-audit/models.json").write_text(
+              json.dumps(audits, indent=2),
+              encoding="utf-8"
+          )
+
+          print(f"Modelos GLB analisados: {len(audits)}")
+          print(f"Ficheiros novos: {len(copied)}")
+          PY
+
+          python3 /tmp/import_assets.py
+
+      - name: Registar catálogo de fontes
+        run: |
+          cat > assets/source/ASSET-SOURCES.md <<'EOF'
+          # Catálogo de recursos 3D
+
+          ## Gobkit
+          Repositório:
+          https://github.com/Ariescar/gobkit-free-assets
+
+          Commit:
+          4e73c68fa6e8ca9d948fcc0ce7215c830a022c3b
+
+          Licença: CC0 1.0.
+          Licença original preservada na pasta Gobkit.
+
+          ## Kenney
+          Repositório:
+          https://github.com/syuhei176/ai-game-assets
+
+          Commit:
+          ebfd758dea8db5793c765cc72564efadb36a4ed0
+
+          Licença CC0 conforme declarada pela fonte.
+
+          ## Preparação PSP
+
+          Os GLB ainda precisam de:
+          - Redução de polígonos.
+          - Otimização de materiais e texturas.
+          - Conversão para formato de vértices compatível com PSP.
+          - Conversão e teste de esqueletos e animações.
+          - Testes de memória e desempenho.
+
+          Esta workflow não altera o código C/C++ do jogo.
+          Não modifica o protagonista, a câmara ou o movimento.
+          EOF
+
+      - name: Guardar recursos no GitHub
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add assets/characters/creatures/gobkit/
+          git add assets/characters/animals/gobkit/
+          git add assets/environment/nature/gobkit/
+          git add assets/environment/kenney/
+          git add assets/source/
+
+          if git diff --cached --quiet; then
+            echo "Nenhum recurso novo. Relatórios atualizados."
+          else
+            git commit -m "assets: importar e auditar biblioteca 3D"
+            git push origin HEAD:main
+          fi
