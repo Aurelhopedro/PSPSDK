@@ -9,6 +9,7 @@ typedef struct {
     float z;
 
     float yaw;
+
     float vertical_velocity;
     float walk_time;
 
@@ -25,5 +26,7 @@ void player_update(
 );
 
 void player_draw(const Player *player);
+
+void player_draw_ground(void);
 
 #endif
