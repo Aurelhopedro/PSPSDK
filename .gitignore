@@ -1,0 +1,22 @@
+# Binários compilados
+*.o
+*.elf
+*.prx
+EBOOT.PBP
+PARAM.SFO
+
+# Build artifacts
+build/
+
+# Ficheiros de sistema
+.DS_Store
+Thumbs.db
+
+# Editores
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
