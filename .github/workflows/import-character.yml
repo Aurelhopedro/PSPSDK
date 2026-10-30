@@ -1,0 +1,98 @@
+name: Importar protagonista 3D
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  import-character:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Obter repositório
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Preparar pastas
+        run: |
+          mkdir -p assets/characters/protagonist/source
+
+      - name: Descarregar modelo 3D
+        run: |
+          BASE="https://raw.githubusercontent.com/programasweights/avatar/e225eee89835d121876b15bf4c887dc20d357950/public/assets"
+
+          curl -fL --retry 3 \
+            "$BASE/character.glb" \
+            -o assets/characters/protagonist/source/protagonist.glb
+
+          curl -fL --retry 3 \
+            "$BASE/QUATERNIUS-LICENSE.txt" \
+            -o assets/characters/protagonist/LICENSE.txt
+
+      - name: Verificar modelo GLB
+        run: |
+          python3 - <<'PY'
+          import os
+          import struct
+
+          path = "assets/characters/protagonist/source/protagonist.glb"
+
+          with open(path, "rb") as f:
+              header = f.read(12)
+
+          if len(header) != 12:
+              raise SystemExit("Erro: ficheiro incompleto")
+
+          magic, version, length = struct.unpack("<4sII", header)
+
+          if magic != b"glTF":
+              raise SystemExit("Erro: formato GLB inválido")
+
+          if version != 2:
+              raise SystemExit("Erro: versão GLB não suportada")
+
+          if length != os.path.getsize(path):
+              raise SystemExit("Erro: tamanho interno inválido")
+
+          print("Modelo GLB válido.")
+          print("Tamanho:", length, "bytes")
+          PY
+
+      - name: Registar origem do modelo
+        run: |
+          cat > assets/characters/protagonist/SOURCE.md <<'EOF'
+          # Protagonista RPG Axel Digital
+
+          Modelo: Quaternius Universal Base Characters
+          Personagem: Superhero Male
+          Licença: CC0 1.0 Universal
+
+          Origem oficial:
+          https://quaternius.com/packs/universalbasecharacters.html
+
+          Repositório de origem do ficheiro:
+          https://github.com/programasweights/avatar
+
+          Commit de origem:
+          e225eee89835d121876b15bf4c887dc20d357950
+
+          O modelo ainda precisa de conversão e otimização
+          para utilização no motor gráfico da PSP.
+          EOF
+
+      - name: Guardar no GitHub
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add assets/characters/protagonist/
+
+          if git diff --cached --quiet; then
+            echo "Nenhuma alteração necessária."
+          else
+            git commit -m "assets: importar protagonista 3D CC0"
+            git push origin HEAD:main
+          fi
