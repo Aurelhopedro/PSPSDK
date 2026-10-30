@@ -1,6 +1,6 @@
 # RPG Axel Digital
 # Criado por Axev Digital
-# FASE 03 — Primeiro ambiente
+# FASE 04 — Carregador de modelos AXP3
 
 TARGET = rpg_axel_digital
 
@@ -8,7 +8,8 @@ OBJS = src/main.o \
        src/graphics/graphics.o \
        src/graphics/camera.o \
        src/graphics/player.o \
-       src/graphics/terrain.o
+       src/graphics/terrain.o \
+       src/graphics/p3d_model.o
 
 PSP_EBOOT_TITLE = RPG Axel Digital
 
