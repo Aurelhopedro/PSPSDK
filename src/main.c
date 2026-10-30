@@ -2,18 +2,19 @@
  * main.c — RPG Axel Digital
  * Criado por Axev Digital
  *
- * Ecrã de arranque com inicialização correta do display PSP.
- * Compatível com PPSSPP e PSP física.
- *
- * FASE 00: Fundação técnica verificada.
+ * FASE 01: Motor gráfico 3D — cubo colorido com rotação contínua.
+ * Renderização via PSP GU/GUM com double buffering e Z-buffer.
  */
 
 #include <pspkernel.h>
-#include <pspdisplay.h>
 #include <pspctrl.h>
-#include <pspdebug.h>
-#include <string.h>
-#include <stdlib.h>
+#include <pspgu.h>
+#include <pspgum.h>
+#include <math.h>
+
+#include "graphics/graphics.h"
+#include "graphics/camera.h"
+#include "graphics/cube.h"
 
 /* ---------------------------------------------------------- */
 /* Módulo PSP                                                 */
@@ -23,51 +24,37 @@ PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
 PSP_HEAP_SIZE_KB(20480);
 
 /* ---------------------------------------------------------- */
-/* Framebuffer — necessário para ecrã visível no PPSSPP      */
-/* ---------------------------------------------------------- */
-#define PSP_FB_WIDTH    512   /* largura real do framebuffer (potência de 2) */
-#define PSP_SCR_WIDTH   480   /* largura visível */
-#define PSP_SCR_HEIGHT  272   /* altura visível */
-#define PSP_PIXEL_FORMAT PSP_DISPLAY_PIXEL_FORMAT_8888
-
-static unsigned int __attribute__((aligned(16))) fb[PSP_FB_WIDTH * PSP_SCR_HEIGHT];
-
-/* ---------------------------------------------------------- */
 /* Callback de saída                                          */
 /* ---------------------------------------------------------- */
 static volatile int running = 1;
 
-int exit_callback(int arg1, int arg2, void *common) {
+static int exit_callback(int arg1, int arg2, void *common) {
+    (void)arg1; (void)arg2; (void)common;
     running = 0;
     return 0;
 }
 
-int callback_thread(SceSize args, void *argp) {
+static int callback_thread(SceSize args, void *argp) {
+    (void)args; (void)argp;
     int cbid = sceKernelCreateCallback("Exit Callback", exit_callback, NULL);
     sceKernelRegisterExitCallback(cbid);
     sceKernelSleepThreadCB();
     return 0;
 }
 
-void setup_callbacks(void) {
+static void setup_callbacks(void) {
     int thid = sceKernelCreateThread("cb_thread", callback_thread,
                                       0x11, 0xFA0, 0, 0);
     if (thid >= 0) sceKernelStartThread(thid, 0, 0);
 }
 
 /* ---------------------------------------------------------- */
-/* Inicializar display corretamente                           */
-/* Sem isto o PPSSPP mostra ecrã preto mesmo com texto        */
+/* Conversão graus → radianos para GUM                       */
 /* ---------------------------------------------------------- */
-void init_display(void) {
-    sceDisplaySetMode(0, PSP_SCR_WIDTH, PSP_SCR_HEIGHT);
-    sceDisplaySetFrameBuf(
-        (void *)fb,
-        PSP_FB_WIDTH,
-        PSP_PIXEL_FORMAT,
-        PSP_DISPLAY_SETBUF_NEXTFRAME
-    );
-}
+#ifndef GU_PI
+#define GU_PI 3.14159265358979323846f
+#endif
+#define DEG2RAD(d) ((d) * GU_PI / 180.0f)
 
 /* ---------------------------------------------------------- */
 /* Entrada principal                                          */
@@ -75,63 +62,67 @@ void init_display(void) {
 int main(void) {
     setup_callbacks();
 
-    /* Inicializar display ANTES do debug screen */
-    init_display();
+    /* Inicializar GU e câmara */
+    gfx_init();
 
-    /* Debug screen aponta para o mesmo framebuffer */
-    pspDebugScreenInitEx((void *)fb, PSP_PIXEL_FORMAT, 1);
-    pspDebugScreenSetBackColor(0xFF1a0a2e); /* roxo escuro */
-    pspDebugScreenSetTextColor(0xFFFFD700); /* dourado */
-    pspDebugScreenClear();
+    Camera cam;
+    camera_init(&cam);
 
-    /* -------------------------------------------------- */
-    /* Cabeçalho                                          */
-    /* -------------------------------------------------- */
-    pspDebugScreenSetXY(2, 1);
-    pspDebugScreenPrintf("============================================");
-    pspDebugScreenSetXY(2, 2);
-    pspDebugScreenPrintf("           RPG AXEL DIGITAL");
-    pspDebugScreenSetXY(2, 3);
-    pspDebugScreenPrintf("           Criado por Axev Digital");
-    pspDebugScreenSetXY(2, 4);
-    pspDebugScreenPrintf("============================================");
+    cube_init();
 
-    /* Estado */
-    pspDebugScreenSetTextColor(0xFF00FF88); /* verde claro */
-    pspDebugScreenSetXY(2, 6);
-    pspDebugScreenPrintf("[ OK ] Display inicializado");
-    pspDebugScreenSetXY(2, 7);
-    pspDebugScreenPrintf("[ OK ] Callbacks do kernel");
-    pspDebugScreenSetXY(2, 8);
-    pspDebugScreenPrintf("[ OK ] Sistema de controlos");
-    pspDebugScreenSetXY(2, 9);
-    pspDebugScreenPrintf("[ OK ] PSPSDK fundacao estavel");
+    /* Estado de rotação (em radianos) */
+    float rot_x = 0.0f;
+    float rot_y = 0.0f;
+    float rot_z = 0.0f;
 
-    /* Info */
-    pspDebugScreenSetTextColor(0xFFAAAAAA); /* cinzento */
-    pspDebugScreenSetXY(2, 11);
-    pspDebugScreenPrintf("FASE 00 concluida. Motor 3D na FASE 01.");
+    /* Velocidade de rotação por frame (~60 fps) */
+    const float speed_x = DEG2RAD(0.5f);
+    const float speed_y = DEG2RAD(0.8f);
+    const float speed_z = DEG2RAD(0.3f);
 
     /* Controlos */
-    pspDebugScreenSetTextColor(0xFFFFFFFF); /* branco */
-    pspDebugScreenSetXY(2, 14);
-    pspDebugScreenPrintf("Pressiona X para sair.");
-
-    /* -------------------------------------------------- */
-    /* Loop principal                                     */
-    /* -------------------------------------------------- */
-    SceCtrlData pad;
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
 
+    /* -------------------------------------------------- */
+    /* Ciclo principal                                    */
+    /* -------------------------------------------------- */
     while (running) {
+        /* 1. Ler controlos */
+        SceCtrlData pad;
         sceCtrlReadBufferPositive(&pad, 1);
         if (pad.Buttons & PSP_CTRL_CROSS) {
             running = 0;
         }
-        sceDisplayWaitVblankStart();
+
+        /* 2. Atualizar rotação */
+        rot_x += speed_x;
+        rot_y += speed_y;
+        rot_z += speed_z;
+
+        /* Manter valores no intervalo [0, 2π] para evitar drift */
+        if (rot_x > 2.0f * GU_PI) rot_x -= 2.0f * GU_PI;
+        if (rot_y > 2.0f * GU_PI) rot_y -= 2.0f * GU_PI;
+        if (rot_z > 2.0f * GU_PI) rot_z -= 2.0f * GU_PI;
+
+        /* 3-4. Iniciar frame e limpar ecrã/Z-buffer */
+        gfx_begin_frame();
+
+        /* 5. Configurar câmara */
+        camera_apply_projection(&cam);
+        camera_apply_view(&cam);
+
+        /* 6. Desenhar cubo */
+        cube_draw(rot_x, rot_y, rot_z);
+
+        /* 7-9. Finalizar e apresentar frame */
+        gfx_end_frame();
+
+        /* 10. Continuar ciclo */
     }
 
+    /* Encerramento */
+    gfx_shutdown();
     sceKernelExitGame();
     return 0;
 }
