@@ -19,19 +19,41 @@ jobs:
 
       - name: Verificar toolchain PSPSDK
         run: |
+          echo "=== Localizar pspdev ==="
+          which psp-gcc || find / -name "psp-gcc" 2>/dev/null | head -5
+          which psp-config || find / -name "psp-config" 2>/dev/null | head -5
+          echo "PATH atual: $PATH"
+          echo "PSPDEV: ${PSPDEV:-nao definido}"
           psp-gcc --version
-          echo "PSPDEV: $PSPDEV"
 
       - name: Compilar projeto
         run: |
-          export PSPDEV=/usr/local/pspdev
-          export PATH=$PATH:$PSPDEV/bin:$PSPDEV/psp/bin
-          make
+          # O container pspdev/pspdev já tem o PATH configurado
+          echo "=== Iniciando build ==="
+          make V=1
+          echo "=== Build concluído ==="
+          echo "=== Ficheiros gerados ==="
+          find . -name "*.pbp" -o -name "*.elf" -o -name "*.prx" 2>/dev/null
+          ls -lh
 
-      - name: Verificar output
+      - name: Verificar e recolher EBOOT.PBP
         run: |
-          ls -lh EBOOT.PBP
-          echo "Build concluído com sucesso!"
+          echo "=== Procurar EBOOT.PBP ==="
+          find . -name "EBOOT.PBP" 2>/dev/null
+          # O PSPSDK pode gerar na raiz ou em subpasta
+          if [ -f "EBOOT.PBP" ]; then
+            echo "✅ EBOOT.PBP encontrado na raiz"
+            ls -lh EBOOT.PBP
+          elif [ -f "build/EBOOT.PBP" ]; then
+            echo "✅ EBOOT.PBP encontrado em build/"
+            ls -lh build/EBOOT.PBP
+            cp build/EBOOT.PBP ./EBOOT.PBP
+          else
+            echo "❌ EBOOT.PBP não encontrado"
+            echo "Listagem completa:"
+            ls -la
+            exit 1
+          fi
 
       - name: Upload EBOOT.PBP como artefacto
         uses: actions/upload-artifact@v4
