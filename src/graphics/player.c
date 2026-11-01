@@ -4,6 +4,7 @@
  *
  * FASE 02: Personagem 3D, movimento, gravidade e animação.
  * FASE 03: Limites do terreno (clamp).
+ * FASE 04: Integração do modelo AXP3 do protagonista.
  */
 
 #include "player.h"
@@ -183,12 +184,7 @@ void player_update(
 }
 
 /* Desenhar o personagem. */
-void player_draw(const Player *player) {
-    float swing = 0.0f;
-
-    if (player->moving && player->grounded) {
-        swing = sinf(player->walk_time) * 0.45f;
-    }
+void player_draw(const Player *player, const P3DModel *model) {
 
     ScePspFQuaternion body_rotation;
 
@@ -211,51 +207,66 @@ void player_draw(const Player *player) {
     sceGumTranslate(&body_position);
     sceGumRotate(&body_rotation);
 
-    /* Pernas. */
-    draw_box(
-        -0.25f, 0.40f, 0,
-        0.17f, 0.40f, 0.18f,
-        swing,
-        0xFF3030FF
-    );
+    /* Se o modelo AXP3 estiver carregado, usá-lo. */
+    if (model && model->loaded) {
 
-    draw_box(
-        0.25f, 0.40f, 0,
-        0.17f, 0.40f, 0.18f,
-        -swing,
-        0xFF3030FF
-    );
+        p3d_model_draw(model);
 
-    /* Tronco. */
-    draw_box(
-        0, 1.15f, 0,
-        0.42f, 0.55f, 0.25f,
-        0,
-        0xFF20A0E0
-    );
+    } else {
 
-    /* Cabeça. */
-    draw_box(
-        0, 1.95f, 0,
-        0.30f, 0.30f, 0.30f,
-        0,
-        0xFFE0B080
-    );
+        /* Personagem provisório: caixas geométricas. */
+        float swing = 0.0f;
 
-    /* Braços. */
-    draw_box(
-        -0.55f, 1.15f, 0,
-        0.15f, 0.48f, 0.16f,
-        -swing,
-        0xFF20A0E0
-    );
+        if (player->moving && player->grounded) {
+            swing = sinf(player->walk_time) * 0.45f;
+        }
 
-    draw_box(
-        0.55f, 1.15f, 0,
-        0.15f, 0.48f, 0.16f,
-        swing,
-        0xFF20A0E0
-    );
+        /* Pernas. */
+        draw_box(
+            -0.25f, 0.40f, 0,
+            0.17f, 0.40f, 0.18f,
+            swing,
+            0xFF3030FF
+        );
+
+        draw_box(
+            0.25f, 0.40f, 0,
+            0.17f, 0.40f, 0.18f,
+            -swing,
+            0xFF3030FF
+        );
+
+        /* Tronco. */
+        draw_box(
+            0, 1.15f, 0,
+            0.42f, 0.55f, 0.25f,
+            0,
+            0xFF20A0E0
+        );
+
+        /* Cabeça. */
+        draw_box(
+            0, 1.95f, 0,
+            0.30f, 0.30f, 0.30f,
+            0,
+            0xFFE0B080
+        );
+
+        /* Braços. */
+        draw_box(
+            -0.55f, 1.15f, 0,
+            0.15f, 0.48f, 0.16f,
+            -swing,
+            0xFF20A0E0
+        );
+
+        draw_box(
+            0.55f, 1.15f, 0,
+            0.15f, 0.48f, 0.16f,
+            swing,
+            0xFF20A0E0
+        );
+    }
 
     sceGumPopMatrix();
 }
