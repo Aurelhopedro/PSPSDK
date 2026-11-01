@@ -7,6 +7,8 @@
  * FASE 04: Integração do modelo AXP3, correção de matrizes GUM.
  * FASE 05: Suporte a relevo (ground_y), animação AXS1,
  *          seleção de clips por estado do jogador.
+ * FASE 05.1: Deteção de aterragem (LAND), transição correta
+ *            salto→land→idle/walk.
  */
 
 #include "player.h"
@@ -96,8 +98,9 @@ void player_init(Player *player) {
     player->yaw = 0.0f;
     player->vertical_velocity = 0.0f;
     player->walk_time = 0.0f;
-    player->grounded = 1;
-    player->moving   = 0;
+    player->grounded  = 1;
+    player->moving    = 0;
+    player->was_grounded = 1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -115,6 +118,9 @@ void player_update(
     float delta_time,
     float ground_y
 ) {
+    /* Guardar estado anterior para detetar aterragem. */
+    player->was_grounded = player->grounded;
+
     float axis_x = ((float)pad->Lx - 128.0f) / 127.0f;
     float axis_z = ((float)pad->Ly - 128.0f) / 127.0f;
 
@@ -141,7 +147,7 @@ void player_update(
     if (player->z >  TERRAIN_LIMIT) player->z =  TERRAIN_LIMIT;
     if (player->z < -TERRAIN_LIMIT) player->z = -TERRAIN_LIMIT;
 
-    /* Salto. */
+    /* Salto: só pode saltar se estiver no chão. */
     if ((pad->Buttons & PSP_CTRL_CIRCLE) && player->grounded) {
         player->vertical_velocity = JUMP_FORCE;
         player->grounded = 0;
@@ -166,7 +172,17 @@ void player_update(
 /* ------------------------------------------------------------------ */
 /*
  * Escolhe o clip de animação com base no estado do jogador.
- * Prioridade: jump > land > walk > idle.
+ *
+ * Prioridades:
+ *   1. No ar → JUMP (não reinicia se já está a saltar)
+ *   2. Acabou de aterrar → LAND (sem loop, uma vez)
+ *   3. Em movimento → WALK
+ *   4. Parado → IDLE
+ *
+ * A deteção de aterragem usa was_grounded:
+ *   - No frame anterior: !grounded (estava no ar)
+ *   - No frame atual:   grounded  (tocou no chão)
+ *   → disparar LAND
  */
 
 void player_select_anim(
@@ -175,8 +191,21 @@ void player_select_anim(
 ) {
     if (!state) return;
 
+    /* Aterragem: transição ar → chão. */
+    int just_landed = (!player->was_grounded && player->grounded);
+
     if (!player->grounded) {
+        /* No ar: JUMP sem loop (reproduz uma vez; frame congela no fim). */
         p3d_anim_set_clip(state, CLIP_JUMP, 0);
+        state->landing = 0;
+    } else if (just_landed) {
+        /* Acabou de aterrar: disparar LAND sem loop. */
+        p3d_anim_set_clip(state, CLIP_LAND, 0);
+        state->landing = 1;
+    } else if (state->landing) {
+        /* Continuar LAND até terminar (p3d_anim_update trata de transitar
+         * automaticamente para IDLE quando landing=1 e clip termina). */
+        /* Não alteramos o clip aqui. */
     } else if (player->moving) {
         p3d_anim_set_clip(state, CLIP_WALK, 1);
     } else {
