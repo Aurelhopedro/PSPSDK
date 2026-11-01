@@ -2,17 +2,14 @@
  * p3d_anim.c — RPG Axel Digital
  * Criado por Axev Digital
  *
- * FASE 05 — Sistema de animação esquelética AXS1 para PSP.
- *
- * Pipeline por frame:
- *   1. p3d_anim_update(): interpola keyframes, calcula matrizes
- *      de ossos em world space, aplica skinning CPU aos vértices
- *      bind-pose → skin_buffer.
- *   2. p3d_anim_draw(): envia skin_buffer para o GE com
- *      sceGumDrawArray, respeitando a matriz MODEL do jogador.
- *
- * Skinning CPU é adequado para a PSP com modelos < 1000 vértices.
- * Para modelos maiores, considerar skinning por hardware (VTYPE).
+ * FASE 05.1 — Correções:
+ *   - Layout binário AXS1 explícito (stride por memcpy, não sizeof).
+ *   - Convenção column-major consistente em todas as matrizes.
+ *   - Inverse bind pose calculada em load e aplicada no skinning.
+ *   - Hierarquia de ossos correta (pai calculado antes do filho).
+ *   - Validação de índices, pesos e limites antes de aceder dados.
+ *   - Animação de salto não reinicia enquanto no ar.
+ *   - Transição land após aterragem.
  */
 
 #include "p3d_anim.h"
@@ -21,79 +18,69 @@
 #include <pspiofilemgr.h>
 #include <pspgu.h>
 #include <pspgum.h>
-
 #include <malloc.h>
 #include <string.h>
 #include <math.h>
 
 /* ------------------------------------------------------------------ */
-/* Constantes do formato AXS1                                         */
+/* Matemática — matrizes column-major 4×4                             */
 /* ------------------------------------------------------------------ */
+/*
+ * Acesso: m[col*4 + row]
+ * m[0..3]  = coluna 0  (base X)
+ * m[4..7]  = coluna 1  (base Y)
+ * m[8..11] = coluna 2  (base Z)
+ * m[12..15]= coluna 3  (translação)
+ */
 
-#define AXS1_VERSION      1
-#define AXS1_VERTEX_SIZE  64   /* bytes por AXS1Vertex */
-#define AXS1_KEY_SIZE     32   /* bytes por AXS1Key */
-#define AXS1_BONE_SIZE    48   /* bytes por AXS1Bone on-disk */
-#define AXS1_CLIP_HDR     24   /* magic16 + frame_count(4) + fps(4) */
-
-/* Vértice de saída para o GE (UV+Normal+Posição, 32 bytes). */
-typedef struct {
-    float u, v;
-    float nx, ny, nz;
-    float px, py, pz;
-} SkinVertex;
-
-/* ------------------------------------------------------------------ */
-/* Matemática de quaterniões (mínima, sem dependências externas)      */
-/* ------------------------------------------------------------------ */
-
-static void quat_slerp(
-    const float *a, const float *b, float t, float *out
-) {
-    /* LERP normalizado — adequado para PSP (evita acos). */
-    float dot = a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + a[3]*b[3];
-
-    float bx = b[0], by = b[1], bz = b[2], bw = b[3];
-    if (dot < 0.0f) {
-        bx = -bx; by = -by; bz = -bz; bw = -bw;
-        dot = -dot;
-    }
-
-    float rx = a[0] + t*(bx - a[0]);
-    float ry = a[1] + t*(by - a[1]);
-    float rz = a[2] + t*(bz - a[2]);
-    float rw = a[3] + t*(bw - a[3]);
-
-    float len = sqrtf(rx*rx + ry*ry + rz*rz + rw*rw);
-    if (len > 0.0001f) {
-        out[0] = rx/len; out[1] = ry/len;
-        out[2] = rz/len; out[3] = rw/len;
-    } else {
-        out[0] = 0; out[1] = 0; out[2] = 0; out[3] = 1;
-    }
+static void mat4_identity(float *m) {
+    memset(m, 0, 16 * sizeof(float));
+    m[0] = m[5] = m[10] = m[15] = 1.0f;
 }
 
-/* Converter quaternião + posição para matriz 4×4 (linha-maior). */
-static void quat_to_mat4(
+/*
+ * Quaternião (xyzw) + posição → matriz column-major.
+ * Equivalente ao padrão OpenGL gluQuaternion.
+ */
+static void quat_pos_to_mat4(
     const float *q, const float *pos, float *m
 ) {
     float x=q[0], y=q[1], z=q[2], w=q[3];
-    float x2=x+x, y2=y+y, z2=z+z;
+    float x2=2*x, y2=2*y, z2=2*z;
     float xx=x*x2, yy=y*y2, zz=z*z2;
     float xy=x*y2, xz=x*z2, yz=y*z2;
     float wx=w*x2, wy=w*y2, wz=w*z2;
 
-    /* Linha 0 */
-    m[ 0]=1-(yy+zz); m[ 1]=xy+wz;    m[ 2]=xz-wy;    m[ 3]=0;
-    /* Linha 1 */
-    m[ 4]=xy-wz;    m[ 5]=1-(xx+zz); m[ 6]=yz+wx;    m[ 7]=0;
-    /* Linha 2 */
-    m[ 8]=xz+wy;    m[ 9]=yz-wx;     m[10]=1-(xx+yy); m[11]=0;
-    /* Linha 3: translação */
-    m[12]=pos[0];   m[13]=pos[1];    m[14]=pos[2];    m[15]=1;
+    /* col 0 */
+    m[ 0]=1-(yy+zz); m[ 1]=xy+wz;     m[ 2]=xz-wy;     m[ 3]=0;
+    /* col 1 */
+    m[ 4]=xy-wz;     m[ 5]=1-(xx+zz); m[ 6]=yz+wx;     m[ 7]=0;
+    /* col 2 */
+    m[ 8]=xz+wy;     m[ 9]=yz-wx;     m[10]=1-(xx+yy); m[11]=0;
+    /* col 3 (translação) */
+    m[12]=pos[0];    m[13]=pos[1];     m[14]=pos[2];    m[15]=1;
 }
 
-/* Transformar posição por matriz 4×4. */
+/*
+ * Multiplicação column-major: out = a * b.
+ * out pode ser diferente de a e b.
+ */
+static void mat4_mul(
+    const float *a, const float *b, float *out
+) {
+    float tmp[16];
+    for (int col = 0; col < 4; col++) {
+        for (int row = 0; row < 4; row++) {
+            float s = 0;
+            for (int k = 0; k < 4; k++)
+                s += a[k*4 + row] * b[col*4 + k];
+            tmp[col*4 + row] = s;
+        }
+    }
+    memcpy(out, tmp, 16 * sizeof(float));
+}
+
+/* Transformar posição: out = M * [v, 1] (coluna 3 = translação). */
 static void mat4_transform_pos(
     const float *m, const float *v, float *out
 ) {
@@ -102,7 +89,7 @@ static void mat4_transform_pos(
     out[2] = m[2]*v[0] + m[6]*v[1] + m[10]*v[2] + m[14];
 }
 
-/* Transformar normal por matriz 4×4 (sem translação). */
+/* Transformar normal (sem translação). */
 static void mat4_transform_nrm(
     const float *m, const float *n, float *out
 ) {
@@ -111,22 +98,46 @@ static void mat4_transform_nrm(
     out[2] = m[2]*n[0] + m[6]*n[1] + m[10]*n[2];
 }
 
-/* Multiplicar duas matrizes 4×4. */
-static void mat4_mul(
-    const float *a, const float *b, float *out
+/*
+ * Inversa de uma matriz de transformação rígida (rot + trans):
+ * inv_rot = transpose(rot3x3), inv_trans = -inv_rot * trans.
+ * Não usa determinante geral — válido apenas para TRS sem escala.
+ */
+static void mat4_invert_rigid(const float *m, float *inv) {
+    /* Transpor parte rotação (col→row swap). */
+    inv[ 0]=m[0]; inv[ 1]=m[4]; inv[ 2]=m[ 8]; inv[ 3]=0;
+    inv[ 4]=m[1]; inv[ 5]=m[5]; inv[ 6]=m[ 9]; inv[ 7]=0;
+    inv[ 8]=m[2]; inv[ 9]=m[6]; inv[10]=m[10]; inv[11]=0;
+    /* Translação inversa: -R^T * t. */
+    inv[12] = -(inv[0]*m[12] + inv[4]*m[13] + inv[ 8]*m[14]);
+    inv[13] = -(inv[1]*m[12] + inv[5]*m[13] + inv[ 9]*m[14]);
+    inv[14] = -(inv[2]*m[12] + inv[6]*m[13] + inv[10]*m[14]);
+    inv[15] = 1.0f;
+}
+
+/* NLERP de quaterniões (evita acos, adequado para PSP). */
+static void quat_nlerp(
+    const float *a, const float *b, float t, float *out
 ) {
-    for (int r = 0; r < 4; r++) {
-        for (int c = 0; c < 4; c++) {
-            float s = 0;
-            for (int k = 0; k < 4; k++)
-                s += a[r*4+k] * b[k*4+c];
-            out[r*4+c] = s;
-        }
+    float dot = a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + a[3]*b[3];
+    float bx=b[0], by=b[1], bz=b[2], bw=b[3];
+    if (dot < 0.0f) { bx=-bx; by=-by; bz=-bz; bw=-bw; }
+
+    float rx = a[0] + t*(bx-a[0]);
+    float ry = a[1] + t*(by-a[1]);
+    float rz = a[2] + t*(bz-a[2]);
+    float rw = a[3] + t*(bw-a[3]);
+
+    float len = sqrtf(rx*rx + ry*ry + rz*rz + rw*rw);
+    if (len > 1e-6f) {
+        out[0]=rx/len; out[1]=ry/len; out[2]=rz/len; out[3]=rw/len;
+    } else {
+        out[0]=0; out[1]=0; out[2]=0; out[3]=1;
     }
 }
 
 /* ------------------------------------------------------------------ */
-/* p3d_anim_init                                                       */
+/* p3d_anim_init / state_init / set_clip                              */
 /* ------------------------------------------------------------------ */
 
 void p3d_anim_init(P3DAnim *anim) {
@@ -134,21 +145,14 @@ void p3d_anim_init(P3DAnim *anim) {
     memset(anim, 0, sizeof(*anim));
 }
 
-/* ------------------------------------------------------------------ */
-/* p3d_anim_state_init                                                 */
-/* ------------------------------------------------------------------ */
-
 void p3d_anim_state_init(P3DAnimState *state) {
     if (!state) return;
-    state->clip_index  = CLIP_IDLE;
-    state->time        = 0.0f;
-    state->blend_time  = 0.0f;
-    state->loop        = 1;
+    state->clip_index   = CLIP_IDLE;
+    state->time         = 0.0f;
+    state->loop         = 1;
+    state->prev_grounded= 1;
+    state->landing      = 0;
 }
-
-/* ------------------------------------------------------------------ */
-/* p3d_anim_set_clip                                                   */
-/* ------------------------------------------------------------------ */
 
 void p3d_anim_set_clip(P3DAnimState *state, int clip_index, int loop) {
     if (!state) return;
@@ -164,15 +168,8 @@ void p3d_anim_set_clip(P3DAnimState *state, int clip_index, int loop) {
 
 void p3d_anim_unload(P3DAnim *anim) {
     if (!anim) return;
-
-    if (anim->skin_buffer) {
-        free(anim->skin_buffer);
-        anim->skin_buffer = NULL;
-    }
-    if (anim->raw_data) {
-        free(anim->raw_data);
-        anim->raw_data = NULL;
-    }
+    if (anim->skin_buffer) { free(anim->skin_buffer); }
+    if (anim->raw_data)    { free(anim->raw_data); }
     p3d_anim_init(anim);
 }
 
@@ -180,15 +177,11 @@ void p3d_anim_unload(P3DAnim *anim) {
 /* p3d_anim_load                                                       */
 /* ------------------------------------------------------------------ */
 /*
- * Estrutura do ficheiro AXS1:
- *   [AXS1Header 32B]
- *   [bone_count × AXS1Bone 48B]
- *   [vertex_count × AXS1Vertex 64B]
- *   para cada clip:
- *     [name 16B][frame_count 4B][fps 4B]
- *     [frame_count × bone_count × AXS1Key 32B]
+ * Lê os dados usando offsets e strides explícitos (AXS1_*_ONDISK),
+ * nunca sizeof() para I/O. Valida todos os campos antes de usar.
  */
 
+/* Cabeçalho on-disk — lido por memcpy, não cast direto. */
 typedef struct {
     char         magic[4];
     unsigned int version;
@@ -196,93 +189,214 @@ typedef struct {
     unsigned int vertex_count;
     unsigned int clip_count;
     unsigned int reserved[3];
-} AXS1Header;
+} AXS1HeaderRaw;   /* 32 bytes — validado por assert abaixo */
 
 int p3d_anim_load(P3DAnim *anim, const char *path) {
     if (!anim || !path) return 0;
-
     p3d_anim_unload(anim);
 
     SceUID fd = sceIoOpen(path, PSP_O_RDONLY, 0);
     if (fd < 0) return 0;
 
-    /* Ler cabeçalho. */
-    AXS1Header hdr;
-    if (sceIoRead(fd, &hdr, sizeof(hdr)) != (int)sizeof(hdr)) {
+    /* --- Cabeçalho --- */
+    AXS1HeaderRaw hdr;
+    if (sceIoRead(fd, &hdr, AXS1_HEADER_SIZE) != AXS1_HEADER_SIZE) {
         sceIoClose(fd); return 0;
     }
-
     if (
         memcmp(hdr.magic, "AXS1", 4) != 0 ||
-        hdr.version != AXS1_VERSION ||
-        hdr.bone_count == 0 ||
-        hdr.bone_count > AXS1_MAX_BONES ||
-        hdr.vertex_count == 0 ||
-        hdr.clip_count == 0 ||
-        hdr.clip_count > AXS1_MAX_CLIPS
+        hdr.version      != AXS1_VERSION   ||
+        hdr.bone_count   == 0              ||
+        hdr.bone_count   >  AXS1_MAX_BONES ||
+        hdr.vertex_count == 0              ||
+        hdr.vertex_count >  AXS1_MAX_VERTICES ||
+        hdr.clip_count   == 0              ||
+        hdr.clip_count   >  AXS1_MAX_CLIPS
     ) {
         sceIoClose(fd); return 0;
     }
 
-    /* Calcular tamanho total do ficheiro para alocar de uma vez. */
-    unsigned int bone_bytes   = hdr.bone_count * AXS1_BONE_SIZE;
-    unsigned int vtx_bytes    = hdr.vertex_count * AXS1_VERTEX_SIZE;
-
-    /* Precisamos do tamanho total do ficheiro para os clips. */
+    /* --- Tamanho total após cabeçalho --- */
     int fsize = sceIoLseek32(fd, 0, PSP_SEEK_END);
-    if (fsize < 0) { sceIoClose(fd); return 0; }
+    if (fsize < AXS1_HEADER_SIZE) { sceIoClose(fd); return 0; }
+    unsigned int data_size = (unsigned int)fsize - AXS1_HEADER_SIZE;
 
-    unsigned int data_size = (unsigned int)fsize - (unsigned int)sizeof(hdr);
+    /* Validar tamanho mínimo esperado. */
+    unsigned int min_expected =
+        hdr.bone_count   * AXS1_BONE_ONDISK +
+        hdr.vertex_count * AXS1_VERTEX_ONDISK +
+        hdr.clip_count   * AXS1_CLIP_HDR_SIZE;
+        /* keys dependem de frame_count, lido depois */
 
+    if (data_size < min_expected) { sceIoClose(fd); return 0; }
+
+    /* --- Alocar e ler bloco de dados --- */
     void *raw = memalign(16, data_size);
     if (!raw) { sceIoClose(fd); return 0; }
 
-    if (sceIoLseek32(fd, sizeof(hdr), PSP_SEEK_SET) < 0) {
+    if (sceIoLseek32(fd, AXS1_HEADER_SIZE, PSP_SEEK_SET) < 0) {
         free(raw); sceIoClose(fd); return 0;
     }
-
     if (sceIoRead(fd, raw, data_size) != (int)data_size) {
         free(raw); sceIoClose(fd); return 0;
     }
     sceIoClose(fd);
 
     unsigned char *ptr = (unsigned char *)raw;
+    unsigned char *end = ptr + data_size;
 
-    /* Bones. */
+    anim->raw_data  = raw;
+    anim->raw_size  = data_size;
+
+    /* --- Ossos (AXS1_BONE_ONDISK = 56B por osso) --- */
+    /*
+     * Layout on-disk (56B):
+     *   0:  name[16]
+     *  16:  parent_index (int32)
+     *  20:  pad[4]
+     *  24:  bind_pos[3]  (float×3 = 12B)
+     *  36:  bind_rot[4]  (float×4 = 16B)
+     *  52:  pad_end[4]
+     */
     anim->bone_count = (int)hdr.bone_count;
     for (int i = 0; i < anim->bone_count; i++) {
-        memcpy(&anim->bones[i], ptr, sizeof(AXS1Bone));
-        ptr += AXS1_BONE_SIZE;
+        if (ptr + AXS1_BONE_ONDISK > end) { p3d_anim_unload(anim); return 0; }
+        AXS1Bone *b = &anim->bones[i];
+        memcpy(b->name,      ptr,      16);
+        memcpy(&b->parent_index, ptr+16, 4);
+        memcpy(b->bind_pos,  ptr+24,  12);
+        memcpy(b->bind_rot,  ptr+36,  16);
+        b->name[15] = '\0';
+        /* Validar parent_index. */
+        if (b->parent_index >= anim->bone_count) {
+            p3d_anim_unload(anim); return 0;
+        }
+        ptr += AXS1_BONE_ONDISK;
     }
 
-    /* Vértices. */
-    anim->vertices     = (AXS1Vertex *)ptr;
+    /* --- Vértices (AXS1_VERTEX_ONDISK = 52B por vértice) --- */
+    /*
+     * Layout on-disk (52B):
+     *  0:  u,v          (float×2 = 8B)
+     *  8:  nx,ny,nz     (float×3 = 12B)
+     * 20:  px,py,pz     (float×3 = 12B)
+     * 32:  bone_idx[4]  (uint8×4 = 4B)
+     * 36:  weight[4]    (float×4 = 16B)
+     */
+    unsigned int vtx_bytes = hdr.vertex_count * AXS1_VERTEX_ONDISK;
+    if (ptr + vtx_bytes > end) { p3d_anim_unload(anim); return 0; }
+
+    /* Alocar array de vértices em memória separada (alinhado). */
+    AXS1Vertex *vbuf = (AXS1Vertex *)memalign(16,
+        hdr.vertex_count * sizeof(AXS1Vertex));
+    if (!vbuf) { p3d_anim_unload(anim); return 0; }
+
+    for (unsigned int v = 0; v < hdr.vertex_count; v++) {
+        unsigned char *vp = ptr + v * AXS1_VERTEX_ONDISK;
+        AXS1Vertex *vv = &vbuf[v];
+        memcpy(&vv->u,        vp+0,  4);
+        memcpy(&vv->v,        vp+4,  4);
+        memcpy(&vv->nx,       vp+8,  4);
+        memcpy(&vv->ny,       vp+12, 4);
+        memcpy(&vv->nz,       vp+16, 4);
+        memcpy(&vv->px,       vp+20, 4);
+        memcpy(&vv->py,       vp+24, 4);
+        memcpy(&vv->pz,       vp+28, 4);
+        memcpy(vv->bone_idx,  vp+32, 4);
+        memcpy(vv->weight,    vp+36, 16);
+
+        /* Validar índices de ossos. */
+        float wsum = 0.0f;
+        for (int w = 0; w < AXS1_BONE_WEIGHTS; w++) {
+            if (vv->bone_idx[w] >= (unsigned char)anim->bone_count)
+                vv->bone_idx[w] = 0;
+            if (vv->weight[w] < 0.0f) vv->weight[w] = 0.0f;
+            wsum += vv->weight[w];
+        }
+        /* Renormalizar pesos. */
+        if (wsum > 1e-6f) {
+            for (int w = 0; w < AXS1_BONE_WEIGHTS; w++)
+                vv->weight[w] /= wsum;
+        } else {
+            vv->weight[0] = 1.0f;
+            for (int w = 1; w < AXS1_BONE_WEIGHTS; w++)
+                vv->weight[w] = 0.0f;
+        }
+    }
+    anim->vertices     = vbuf;
     anim->vertex_count = hdr.vertex_count;
     ptr += vtx_bytes;
 
-    /* Clips. */
+    /* --- Clips --- */
     anim->clip_count = (int)hdr.clip_count;
     for (int c = 0; c < anim->clip_count; c++) {
-        memcpy(anim->clips[c].name, ptr, 16); ptr += 16;
-        memcpy(&anim->clips[c].frame_count, ptr, 4); ptr += 4;
-        memcpy(&anim->clips[c].fps, ptr, 4); ptr += 4;
+        if (ptr + AXS1_CLIP_HDR_SIZE > end) { p3d_anim_unload(anim); return 0; }
+        AXS1Clip *cl = &anim->clips[c];
+        memcpy(cl->name,        ptr,    16);
+        memcpy(&cl->frame_count,ptr+16,  4);
+        memcpy(&cl->fps,        ptr+20,  4);
+        cl->name[15] = '\0';
+        ptr += AXS1_CLIP_HDR_SIZE;
+
+        /* Validar clip. */
+        if (cl->frame_count <= 0 || cl->fps <= 0.0f) {
+            p3d_anim_unload(anim); return 0;
+        }
 
         unsigned int key_bytes =
-            (unsigned int)anim->clips[c].frame_count *
-            (unsigned int)anim->bone_count * AXS1_KEY_SIZE;
+            (unsigned int)cl->frame_count *
+            (unsigned int)anim->bone_count *
+            AXS1_KEY_ONDISK;
 
-        anim->clips[c].keys = (AXS1Key *)ptr;
+        if (ptr + key_bytes > end) { p3d_anim_unload(anim); return 0; }
+
+        /* Alocar array de keys em memória separada. */
+        unsigned int key_count =
+            (unsigned int)cl->frame_count *
+            (unsigned int)anim->bone_count;
+
+        AXS1Key *kbuf = (AXS1Key *)memalign(16, key_count * sizeof(AXS1Key));
+        if (!kbuf) { p3d_anim_unload(anim); return 0; }
+
+        for (unsigned int k = 0; k < key_count; k++) {
+            unsigned char *kp = ptr + k * AXS1_KEY_ONDISK;
+            memcpy(kbuf[k].rot, kp,    16);
+            memcpy(kbuf[k].pos, kp+16, 12);
+            /* Normalizar quaternião. */
+            float *r = kbuf[k].rot;
+            float  l = sqrtf(r[0]*r[0]+r[1]*r[1]+r[2]*r[2]+r[3]*r[3]);
+            if (l > 1e-6f) { r[0]/=l; r[1]/=l; r[2]/=l; r[3]/=l; }
+            else            { r[0]=0; r[1]=0; r[2]=0; r[3]=1; }
+        }
+        cl->keys = kbuf;
         ptr += key_bytes;
     }
 
-    anim->raw_data = raw;
+    /* --- Calcular inverse bind pose matrices --- */
+    /*
+     * bind_mat[b] = world-space bind matrix do osso b.
+     * Calculado hierarquicamente (pai antes do filho,
+     * garantido porque bones são sempre em ordem topológica).
+     */
+    float bind_mat[AXS1_MAX_BONES][16];
+    for (int b = 0; b < anim->bone_count; b++) {
+        AXS1Bone *bone = &anim->bones[b];
+        float local[16];
+        quat_pos_to_mat4(bone->bind_rot, bone->bind_pos, local);
 
-    /* Alocar buffer de skinning. */
-    unsigned int skin_sz = hdr.vertex_count * sizeof(SkinVertex);
-    anim->skin_buffer = memalign(16, skin_sz);
-    if (!anim->skin_buffer) {
-        p3d_anim_unload(anim); return 0;
+        int par = bone->parent_index;
+        if (par < 0) {
+            memcpy(bind_mat[b], local, sizeof(local));
+        } else {
+            mat4_mul(bind_mat[par], local, bind_mat[b]);
+        }
+        mat4_invert_rigid(bind_mat[b], anim->inv_bind[b]);
     }
+
+    /* --- Buffer de skinning --- */
+    unsigned int skin_sz = hdr.vertex_count * sizeof(AXS1SkinVtx);
+    anim->skin_buffer = (AXS1SkinVtx *)memalign(16, skin_sz);
+    if (!anim->skin_buffer) { p3d_anim_unload(anim); return 0; }
     anim->skin_size = skin_sz;
 
     sceKernelDcacheWritebackRange(raw, data_size);
@@ -292,100 +406,103 @@ int p3d_anim_load(P3DAnim *anim, const char *path) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Matrizes de osso por frame                                          */
+/* ------------------------------------------------------------------ */
+
+static float s_bone_mat[AXS1_MAX_BONES][16];   /* skinning matrix */
+static float s_anim_mat[AXS1_MAX_BONES][16];   /* animated world matrix */
+
+/* ------------------------------------------------------------------ */
 /* p3d_anim_update                                                     */
 /* ------------------------------------------------------------------ */
-/*
- * 1. Avançar o tempo no clip.
- * 2. Interpolar keyframes.
- * 3. Calcular matrizes de ossos em world space.
- * 4. Calcular inverse-bind e aplicar skinning CPU.
- */
-
-/* Matrizes de osso calculadas por frame (stack local, sem malloc). */
-static float bone_mat[AXS1_MAX_BONES][16];
 
 void p3d_anim_update(
     P3DAnim *anim, P3DAnimState *state, float delta_time
 ) {
     if (!anim || !anim->loaded || !state) return;
 
-    /* Clip válido? */
+    /* Clip bounds. */
     if (state->clip_index < 0 || state->clip_index >= anim->clip_count)
         state->clip_index = 0;
 
     AXS1Clip *clip = &anim->clips[state->clip_index];
-
-    if (clip->frame_count < 1) return;
+    if (clip->frame_count < 1 || clip->fps <= 0.0f) return;
 
     /* Avançar tempo. */
     state->time += delta_time;
-
     float duration = (float)clip->frame_count / clip->fps;
+
     if (state->loop) {
-        while (state->time >= duration)
-            state->time -= duration;
+        while (state->time >= duration) state->time -= duration;
         if (state->time < 0.0f) state->time = 0.0f;
     } else {
-        if (state->time > duration) state->time = duration;
+        if (state->time >= duration) {
+            state->time = duration;
+            /* Clip de land terminou: transitar para idle. */
+            if (state->landing) {
+                state->landing = 0;
+                p3d_anim_set_clip(state, CLIP_IDLE, 1);
+                clip = &anim->clips[state->clip_index];
+                state->time = 0.0f;
+            }
+        }
     }
 
-    /* Frame de interpolação. */
-    float frame_f  = state->time * clip->fps;
-    int   frame_a  = (int)frame_f;
-    float blend    = frame_f - (float)frame_a;
+    /* Frames A e B para interpolação. */
+    float frame_f = state->time * clip->fps;
+    int   frame_a = (int)frame_f;
+    float blend   = frame_f - (float)frame_a;
 
+    if (frame_a >= clip->frame_count) frame_a = clip->frame_count - 1;
     int frame_b = frame_a + 1;
-    if (frame_b >= clip->frame_count) {
+    if (frame_b >= clip->frame_count)
         frame_b = state->loop ? 0 : clip->frame_count - 1;
-    }
-    if (frame_a >= clip->frame_count)
-        frame_a = clip->frame_count - 1;
 
-    /* Calcular matrizes de osso. */
+    /* --- Calcular matrizes animadas e de skinning --- */
     for (int b = 0; b < anim->bone_count; b++) {
         AXS1Key *ka = &clip->keys[frame_a * anim->bone_count + b];
         AXS1Key *kb = &clip->keys[frame_b * anim->bone_count + b];
 
         float rot[4], pos[3];
-        quat_slerp(ka->rot, kb->rot, blend, rot);
-
-        pos[0] = ka->pos[0] + blend * (kb->pos[0] - ka->pos[0]);
-        pos[1] = ka->pos[1] + blend * (kb->pos[1] - ka->pos[1]);
-        pos[2] = ka->pos[2] + blend * (kb->pos[2] - ka->pos[2]);
+        quat_nlerp(ka->rot, kb->rot, blend, rot);
+        pos[0] = ka->pos[0] + blend*(kb->pos[0]-ka->pos[0]);
+        pos[1] = ka->pos[1] + blend*(kb->pos[1]-ka->pos[1]);
+        pos[2] = ka->pos[2] + blend*(kb->pos[2]-ka->pos[2]);
 
         float local[16];
-        quat_to_mat4(rot, pos, local);
+        quat_pos_to_mat4(rot, pos, local);
 
         int par = anim->bones[b].parent_index;
         if (par < 0) {
-            memcpy(bone_mat[b], local, sizeof(local));
+            memcpy(s_anim_mat[b], local, sizeof(local));
         } else {
-            mat4_mul(bone_mat[par], local, bone_mat[b]);
+            mat4_mul(s_anim_mat[par], local, s_anim_mat[b]);
         }
+
+        /* skinning_mat = anim_world * inv_bind */
+        mat4_mul(s_anim_mat[b], anim->inv_bind[b], s_bone_mat[b]);
     }
 
-    /* Skinning CPU: transformar cada vértice. */
-    SkinVertex *out = (SkinVertex *)anim->skin_buffer;
+    /* --- Skinning CPU --- */
+    AXS1SkinVtx *out = anim->skin_buffer;
 
     for (unsigned int v = 0; v < anim->vertex_count; v++) {
         AXS1Vertex *sv = &anim->vertices[v];
 
-        float px = 0, py = 0, pz = 0;
-        float nx = 0, ny = 0, nz = 0;
+        float px=0, py=0, pz=0;
+        float nx=0, ny=0, nz=0;
+        float bp[3] = { sv->px, sv->py, sv->pz };
+        float bn[3] = { sv->nx, sv->ny, sv->nz };
 
         for (int w = 0; w < AXS1_BONE_WEIGHTS; w++) {
             float wt = sv->weight[w];
-            if (wt < 0.0001f) continue;
-
+            if (wt < 1e-6f) continue;
             int bi = sv->bone_idx[w];
             if (bi >= anim->bone_count) continue;
 
             float tp[3], tn[3];
-            float bp[3] = { sv->px, sv->py, sv->pz };
-            float bn[3] = { sv->nx, sv->ny, sv->nz };
-
-            mat4_transform_pos(bone_mat[bi], bp, tp);
-            mat4_transform_nrm(bone_mat[bi], bn, tn);
+            mat4_transform_pos(s_bone_mat[bi], bp, tp);
+            mat4_transform_nrm(s_bone_mat[bi], bn, tn);
 
             px += tp[0]*wt; py += tp[1]*wt; pz += tp[2]*wt;
             nx += tn[0]*wt; ny += tn[1]*wt; nz += tn[2]*wt;
@@ -393,11 +510,12 @@ void p3d_anim_update(
 
         /* Normalizar normal. */
         float nl = sqrtf(nx*nx + ny*ny + nz*nz);
-        if (nl > 0.0001f) { nx/=nl; ny/=nl; nz/=nl; }
+        if (nl > 1e-6f) { nx/=nl; ny/=nl; nz/=nl; }
+        else { nx=0; ny=1; nz=0; }
 
-        out[v].u = sv->u; out[v].v = sv->v;
-        out[v].nx = nx; out[v].ny = ny; out[v].nz = nz;
-        out[v].px = px; out[v].py = py; out[v].pz = pz;
+        out[v].u=sv->u; out[v].v=sv->v;
+        out[v].nx=nx; out[v].ny=ny; out[v].nz=nz;
+        out[v].px=px; out[v].py=py; out[v].pz=pz;
     }
 
     sceKernelDcacheWritebackRange(
