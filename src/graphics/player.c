@@ -5,6 +5,9 @@
  * FASE 02: Personagem 3D, movimento, gravidade e animação.
  * FASE 03: Limites do terreno (clamp).
  * FASE 04: Integração do modelo AXP3 do protagonista.
+ * FASE 04.1: Corrigida matriz GU_MODEL; adicionada escala e
+ *            LoadIdentity antes do push para evitar contaminação
+ *            por matrizes do terreno ou da câmara.
  */
 
 #include "player.h"
@@ -13,20 +16,28 @@
 #include <pspgum.h>
 #include <math.h>
 
-#define DEADZONE 20.0f
-#define MOVE_SPEED 2.5f
-#define GRAVITY 9.8f
-#define JUMP_FORCE 4.5f
+#define DEADZONE     20.0f
+#define MOVE_SPEED    2.5f
+#define GRAVITY       9.8f
+#define JUMP_FORCE    4.5f
 
 /* O terreno tem 100x100 unidades centradas em 0,0.
    Usamos 48 como limite (margem de 2 unidades antes da borda). */
 #define TERRAIN_LIMIT 48.0f
+
+/*
+ * Escala aplicada ao modelo AXP3.
+ * Ajustar se o modelo exportado tiver dimensões muito diferentes
+ * do personagem provisório (altura ~2 unidades de mundo).
+ */
+#define MODEL_SCALE 1.0f
 
 typedef struct {
     float x;
     float y;
     float z;
 } Vertex;
+
 /* Cubo unitário com seis faces. */
 static Vertex __attribute__((aligned(16))) box_vertices[] = {
     /* Frente */
@@ -46,8 +57,8 @@ static Vertex __attribute__((aligned(16))) box_vertices[] = {
     {-1,-1,-1}, { 1,-1, 1}, {-1,-1, 1},
 
     /* Direita */
-    {1,-1, 1}, {1,-1,-1}, {1, 1,-1},
-    {1,-1, 1}, {1, 1,-1}, {1, 1, 1},
+    { 1,-1, 1}, { 1,-1,-1}, { 1, 1,-1},
+    { 1,-1, 1}, { 1, 1,-1}, { 1, 1, 1},
 
     /* Esquerda */
     {-1,-1,-1}, {-1,-1, 1}, {-1, 1, 1},
@@ -73,10 +84,9 @@ static void draw_box(
     unsigned int color
 ) {
     ScePspFVector3 position = {x, y, z};
-    ScePspFVector3 scale = {sx, sy, sz};
+    ScePspFVector3 scale    = {sx, sy, sz};
 
     ScePspFQuaternion rotation;
-
     float half = rotation_x * 0.5f;
 
     rotation.x = sinf(half);
@@ -85,7 +95,6 @@ static void draw_box(
     rotation.w = cosf(half);
 
     sceGumPushMatrix();
-
     sceGumTranslate(&position);
     sceGumRotate(&rotation);
     sceGumScale(&scale);
@@ -103,7 +112,10 @@ static void draw_box(
     sceGumPopMatrix();
 }
 
-/* Inicialização do personagem. */
+/* -------------------------------------------------- */
+/* INICIALIZAÇÃO                                      */
+/* -------------------------------------------------- */
+
 void player_init(Player *player) {
     player->x = 0.0f;
     player->y = 0.0f;
@@ -112,13 +124,16 @@ void player_init(Player *player) {
     player->yaw = 0.0f;
 
     player->vertical_velocity = 0.0f;
-    player->walk_time = 0.0f;
+    player->walk_time          = 0.0f;
 
     player->grounded = 1;
-    player->moving = 0;
+    player->moving   = 0;
 }
 
-/* Movimento, salto e gravidade. */
+/* -------------------------------------------------- */
+/* ATUALIZAÇÃO                                        */
+/* -------------------------------------------------- */
+
 void player_update(
     Player *player,
     const SceCtrlData *pad,
@@ -127,16 +142,10 @@ void player_update(
     float axis_x = ((float)pad->Lx - 128.0f) / 127.0f;
     float axis_z = ((float)pad->Ly - 128.0f) / 127.0f;
 
-    if (fabsf(axis_x) < DEADZONE / 127.0f)
-        axis_x = 0.0f;
+    if (fabsf(axis_x) < DEADZONE / 127.0f) axis_x = 0.0f;
+    if (fabsf(axis_z) < DEADZONE / 127.0f) axis_z = 0.0f;
 
-    if (fabsf(axis_z) < DEADZONE / 127.0f)
-        axis_z = 0.0f;
-
-    float length = sqrtf(
-        axis_x * axis_x +
-        axis_z * axis_z
-    );
+    float length = sqrtf(axis_x * axis_x + axis_z * axis_z);
 
     if (length > 1.0f) {
         axis_x /= length;
@@ -156,7 +165,7 @@ void player_update(
         player->walk_time = 0.0f;
     }
 
-    /* Limites do terreno: impedir saída da área explorável. */
+    /* Limites do terreno. */
     if (player->x >  TERRAIN_LIMIT) player->x =  TERRAIN_LIMIT;
     if (player->x < -TERRAIN_LIMIT) player->x = -TERRAIN_LIMIT;
     if (player->z >  TERRAIN_LIMIT) player->z =  TERRAIN_LIMIT;
@@ -168,14 +177,13 @@ void player_update(
         player->grounded = 0;
     }
 
-    /* Aplicar gravidade. */
+    /* Gravidade. */
     if (!player->grounded) {
         player->vertical_velocity -= GRAVITY * delta_time;
-
         player->y += player->vertical_velocity * delta_time;
     }
 
-    /* Impedir que o personagem atravesse o chão. */
+    /* Chão. */
     if (player->y <= 0.0f) {
         player->y = 0.0f;
         player->vertical_velocity = 0.0f;
@@ -183,95 +191,113 @@ void player_update(
     }
 }
 
-/* Desenhar o personagem. */
+/* -------------------------------------------------- */
+/* DESENHAR PERSONAGEM                                */
+/* -------------------------------------------------- */
+/*
+ * CORREÇÃO FASE 04.1:
+ *
+ * 1. sceGumMatrixMode(GU_MODEL) seguido de sceGumLoadIdentity()
+ *    garante que a matriz parte de um estado limpo, sem
+ *    contaminação por transformações do terreno ou da câmara.
+ *
+ * 2. sceGumPushMatrix() empilha essa identidade limpa.
+ *    Translate + Rotate aplicam posição e yaw do jogador.
+ *
+ * 3. Para o modelo AXP3: sceGumScale() aplica MODEL_SCALE
+ *    antes de chamar p3d_model_draw(), que usa sceGumDrawArray
+ *    e respeita a matriz corrente.
+ *
+ * 4. Fallback: personagem provisório em caso de falha de
+ *    carregamento, com tint vermelho para diagnóstico visual.
+ */
+
 void player_draw(const Player *player, const P3DModel *model) {
 
-    ScePspFQuaternion body_rotation;
-
-    float half = player->yaw * 0.5f;
-
-    body_rotation.x = 0.0f;
-    body_rotation.y = sinf(half);
-    body_rotation.z = 0.0f;
-    body_rotation.w = cosf(half);
-
-    ScePspFVector3 body_position = {
+    /* Posição do jogador no mundo. */
+    ScePspFVector3 pos = {
         player->x,
         player->y,
         player->z
     };
 
+    /* Rotação yaw como quaternião em torno do eixo Y. */
+    ScePspFQuaternion rot;
+    float half = player->yaw * 0.5f;
+    rot.x = 0.0f;
+    rot.y = sinf(half);
+    rot.z = 0.0f;
+    rot.w = cosf(half);
+
+    /*
+     * Inicializar a matriz MODEL com identidade antes de push.
+     * Evita que transformações residuais do terreno ou da câmara
+     * contaminem a posição do personagem.
+     */
     sceGumMatrixMode(GU_MODEL);
+    sceGumLoadIdentity();
     sceGumPushMatrix();
 
-    sceGumTranslate(&body_position);
-    sceGumRotate(&body_rotation);
+    sceGumTranslate(&pos);
+    sceGumRotate(&rot);
 
-    /* Se o modelo AXP3 estiver carregado, usá-lo. */
     if (model && model->loaded) {
+
+        /* Escala uniforme para o modelo AXP3. */
+        ScePspFVector3 scale = {
+            MODEL_SCALE,
+            MODEL_SCALE,
+            MODEL_SCALE
+        };
+        sceGumScale(&scale);
 
         p3d_model_draw(model);
 
     } else {
 
-        /* Personagem provisório: caixas geométricas. */
-        float swing = 0.0f;
+        /*
+         * Personagem provisório.
+         * Tint vermelho indica falha de carregamento do modelo;
+         * cores normais indicam que nunca foi tentado o load
+         * (model == NULL) ou que está em uso deliberado.
+         */
+        unsigned int leg_color  = 0xFF3030FF;
+        unsigned int body_color = 0xFF20A0E0;
+        unsigned int head_color = 0xFFE0B080;
 
-        if (player->moving && player->grounded) {
-            swing = sinf(player->walk_time) * 0.45f;
+        if (model && !model->loaded) {
+            /* Falhou o carregamento: tint vermelho. */
+            leg_color  = 0xFF2020CC;
+            body_color = 0xFF2020CC;
+            head_color = 0xFF4040CC;
         }
 
-        /* Pernas. */
-        draw_box(
-            -0.25f, 0.40f, 0,
-            0.17f, 0.40f, 0.18f,
-            swing,
-            0xFF3030FF
-        );
+        float swing = 0.0f;
+        if (player->moving && player->grounded)
+            swing = sinf(player->walk_time) * 0.45f;
 
-        draw_box(
-            0.25f, 0.40f, 0,
-            0.17f, 0.40f, 0.18f,
-            -swing,
-            0xFF3030FF
-        );
+        /* Pernas. */
+        draw_box(-0.25f, 0.40f, 0, 0.17f, 0.40f, 0.18f,  swing, leg_color);
+        draw_box( 0.25f, 0.40f, 0, 0.17f, 0.40f, 0.18f, -swing, leg_color);
 
         /* Tronco. */
-        draw_box(
-            0, 1.15f, 0,
-            0.42f, 0.55f, 0.25f,
-            0,
-            0xFF20A0E0
-        );
+        draw_box(0, 1.15f, 0, 0.42f, 0.55f, 0.25f, 0, body_color);
 
         /* Cabeça. */
-        draw_box(
-            0, 1.95f, 0,
-            0.30f, 0.30f, 0.30f,
-            0,
-            0xFFE0B080
-        );
+        draw_box(0, 1.95f, 0, 0.30f, 0.30f, 0.30f, 0, head_color);
 
         /* Braços. */
-        draw_box(
-            -0.55f, 1.15f, 0,
-            0.15f, 0.48f, 0.16f,
-            -swing,
-            0xFF20A0E0
-        );
-
-        draw_box(
-            0.55f, 1.15f, 0,
-            0.15f, 0.48f, 0.16f,
-            swing,
-            0xFF20A0E0
-        );
+        draw_box(-0.55f, 1.15f, 0, 0.15f, 0.48f, 0.16f, -swing, body_color);
+        draw_box( 0.55f, 1.15f, 0, 0.15f, 0.48f, 0.16f,  swing, body_color);
     }
 
     sceGumPopMatrix();
 }
 
-/* Desenhar o chão. */
+/* -------------------------------------------------- */
+/* DESENHAR O CHÃO                                    */
+/* -------------------------------------------------- */
+
 void player_draw_ground(void) {
     sceGumMatrixMode(GU_MODEL);
     sceGumLoadIdentity();
