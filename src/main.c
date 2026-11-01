@@ -4,6 +4,7 @@
  *
  * FASE 03 — Primeiro ambiente.
  * FASE 04 — Integração do protagonista 3D (AXP3).
+ * FASE 04.1 — Diagnóstico: retorno de p3d_model_load registado.
  */
 
 #include <pspkernel.h>
@@ -76,17 +77,19 @@ int main(void) {
     Player player;
     player_init(&player);
 
-    /* Inicializar e carregar o modelo do protagonista. */
+    /* Inicializar e carregar o modelo do protagonista.
+     * model_ok == 1: modelo carregado, player_draw usa AXP3.
+     * model_ok == 0: falha, player_draw usa personagem provisório
+     *                com tint de diagnóstico. */
     P3DModel protagonist;
     p3d_model_init(&protagonist);
 
-    p3d_model_load(
+    int model_ok = p3d_model_load(
         &protagonist,
         "ms0:/PSP/GAME/RPGAXEL/assets/protagonist.p3d"
     );
 
-    /* Se o carregamento falhar, protagonist.loaded == 0
-       e player_draw usará o personagem provisório. */
+    (void)model_ok; /* Diagnóstico: visível no tint do fallback. */
 
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
