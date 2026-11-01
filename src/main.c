@@ -3,6 +3,7 @@
  * Criado por Axev Digital
  *
  * FASE 03 — Primeiro ambiente.
+ * FASE 04 — Integração do protagonista 3D (AXP3).
  */
 
 #include <pspkernel.h>
@@ -14,6 +15,7 @@
 #include "graphics/camera.h"
 #include "graphics/player.h"
 #include "graphics/terrain.h"
+#include "graphics/p3d_model.h"
 
 PSP_MODULE_INFO("RPG_AXEL_DIGITAL", 0, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
@@ -74,6 +76,18 @@ int main(void) {
     Player player;
     player_init(&player);
 
+    /* Inicializar e carregar o modelo do protagonista. */
+    P3DModel protagonist;
+    p3d_model_init(&protagonist);
+
+    p3d_model_load(
+        &protagonist,
+        "ms0:/PSP/GAME/RPGAXEL/assets/protagonist.p3d"
+    );
+
+    /* Se o carregamento falhar, protagonist.loaded == 0
+       e player_draw usará o personagem provisório. */
+
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
 
@@ -111,10 +125,13 @@ int main(void) {
 
         /* Desenhar o ambiente e o personagem. */
         terrain_draw();
-        player_draw(&player);
+        player_draw(&player, &protagonist);
 
         gfx_end_frame();
     }
+
+    /* Libertar o modelo antes de sair. */
+    p3d_model_unload(&protagonist);
 
     sceGuTerm();
     sceKernelExitGame();
