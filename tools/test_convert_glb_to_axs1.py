@@ -663,14 +663,13 @@ def test_ibm_identity_compatible():
 
 def test_ibm_translation_inverse():
     """mat4_inverse de uma translação pura deve ser a translação negativa."""
-    import math
     m = conv.mat4_identity()
     m[12] = 3.0; m[13] = -1.0; m[14] = 2.0
     inv = conv.mat4_inverse(m)
     # inv deve ter translação [-3, 1, -2]
-    near(inv[12], -3.0, tol=1e-3)
-    near(inv[13],  1.0, tol=1e-3)
-    near(inv[14], -2.0, tol=1e-3)
+    near(inv[12], -3.0, tol=1e-3, msg="IBM: inverse de translação X:")
+    near(inv[13],  1.0, tol=1e-3, msg="IBM: inverse de translação Y:")
+    near(inv[14], -2.0, tol=1e-3, msg="IBM: inverse de translação Z:")
 
 def test_mat4_multiply_identity():
     identity = conv.mat4_identity()
@@ -701,6 +700,165 @@ def test_vertex_offset_constants():
     eq(conv._VTX_WGHT_OFF, 36)
     # Tamanho total: 36 + 4×4 = 52
     eq(conv._VTX_WGHT_OFF + 4*4, conv.AXS1_VERTEX_ONDISK)
+
+# ---------------------------------------------------------------------------
+# 17. Novos testes matemáticos de mat4_inverse
+# ---------------------------------------------------------------------------
+
+def _mat4_product_is_identity(m):
+    """Verifica se m × mat4_inverse(m) ≈ identidade."""
+    inv = conv.mat4_inverse(m)
+    product = conv.mat4_multiply(m, inv)
+    identity = conv.mat4_identity()
+    ok, idx, got, exp = conv.mat4_approx_equal(product, identity, tol=1e-5)
+    assert ok, (
+        f"M × inv(M) != identidade: componente [{idx}] "
+        f"got={got:.8f} exp={exp:.8f}"
+    )
+
+def test_mat4_inverse_identity():
+    """inv(I) == I."""
+    identity = conv.mat4_identity()
+    inv = conv.mat4_inverse(identity)
+    ok, idx, got, exp = conv.mat4_approx_equal(inv, identity, tol=1e-6)
+    assert ok, f"inv(identidade) != identidade: [{idx}] got={got} exp={exp}"
+
+def test_mat4_inverse_translation_x():
+    """Translação pura em X: inv tem -X."""
+    m = conv.mat4_identity()
+    m[12] = 5.0
+    inv = conv.mat4_inverse(m)
+    near(inv[12], -5.0, tol=1e-6, msg="translação X:")
+    near(inv[13],  0.0, tol=1e-6, msg="translação Y deve ser 0:")
+    near(inv[14],  0.0, tol=1e-6, msg="translação Z deve ser 0:")
+
+def test_mat4_inverse_translation_y():
+    """Translação pura em Y: inv tem -Y."""
+    m = conv.mat4_identity()
+    m[13] = -7.0
+    inv = conv.mat4_inverse(m)
+    near(inv[12],  0.0, tol=1e-6)
+    near(inv[13],  7.0, tol=1e-6, msg="translação Y inversa:")
+    near(inv[14],  0.0, tol=1e-6)
+
+def test_mat4_inverse_translation_z():
+    """Translação pura em Z: inv tem -Z."""
+    m = conv.mat4_identity()
+    m[14] = 4.5
+    inv = conv.mat4_inverse(m)
+    near(inv[12],  0.0, tol=1e-6)
+    near(inv[13],  0.0, tol=1e-6)
+    near(inv[14], -4.5, tol=1e-6, msg="translação Z inversa:")
+
+def test_mat4_inverse_translation_xyz():
+    """Translação [3, -1, 2]: inv deve ter [-3, 1, -2]."""
+    m = conv.mat4_identity()
+    m[12] = 3.0; m[13] = -1.0; m[14] = 2.0
+    inv = conv.mat4_inverse(m)
+    near(inv[12], -3.0, tol=1e-6, msg="translação XYZ X:")
+    near(inv[13],  1.0, tol=1e-6, msg="translação XYZ Y:")
+    near(inv[14], -2.0, tol=1e-6, msg="translação XYZ Z:")
+    _mat4_product_is_identity(m)
+
+def test_mat4_inverse_rotation_90_z():
+    """Rotação 90° em torno de Z — inv deve ser rotação -90°."""
+    # column-major: coluna 0 = (cos, sin, 0, 0), coluna 1 = (-sin, cos, 0, 0)
+    c = math.cos(math.pi / 2)   # ≈ 0
+    s = math.sin(math.pi / 2)   # ≈ 1
+    m = conv.mat4_identity()
+    m[0] = c;  m[1] = s   # coluna 0: linhas 0,1
+    m[4] = -s; m[5] = c   # coluna 1: linhas 0,1
+    inv = conv.mat4_inverse(m)
+    # inv deve ser transposta (rotação inversa)
+    near(inv[0],  c, tol=1e-5)
+    near(inv[1], -s, tol=1e-5)
+    near(inv[4],  s, tol=1e-5)
+    near(inv[5],  c, tol=1e-5)
+    _mat4_product_is_identity(m)
+
+def test_mat4_inverse_rotation_45_x():
+    """Rotação 45° em torno de X — M × inv(M) == I."""
+    a = math.pi / 4
+    c = math.cos(a); s = math.sin(a)
+    m = conv.mat4_identity()
+    # Rotação X column-major: coluna 1 = (0,c,s,0), coluna 2 = (0,-s,c,0)
+    m[5]  =  c; m[6]  = s
+    m[9]  = -s; m[10] = c
+    _mat4_product_is_identity(m)
+
+def test_mat4_inverse_uniform_scale():
+    """Escala uniforme 2.0: inv tem 0.5 na diagonal."""
+    m = conv.mat4_identity()
+    m[0] = 2.0; m[5] = 2.0; m[10] = 2.0
+    inv = conv.mat4_inverse(m)
+    near(inv[0],  0.5, tol=1e-6, msg="escala inv[0]:")
+    near(inv[5],  0.5, tol=1e-6, msg="escala inv[5]:")
+    near(inv[10], 0.5, tol=1e-6, msg="escala inv[10]:")
+    near(inv[15], 1.0, tol=1e-6)
+    _mat4_product_is_identity(m)
+
+def test_mat4_inverse_nonuniform_scale():
+    """Escala não-uniforme [3, 0.5, 2]: invertível."""
+    m = conv.mat4_identity()
+    m[0] = 3.0; m[5] = 0.5; m[10] = 2.0
+    inv = conv.mat4_inverse(m)
+    near(inv[0],  1.0/3.0, tol=1e-6)
+    near(inv[5],  2.0,     tol=1e-6)
+    near(inv[10], 0.5,     tol=1e-6)
+    _mat4_product_is_identity(m)
+
+def test_mat4_inverse_composed_rotation_translation():
+    """Matriz composta rotação + translação: M × inv(M) == I."""
+    # Rotação 30° em Z + translação [1, 2, 3]
+    a = math.pi / 6
+    c = math.cos(a); s = math.sin(a)
+    m = conv.mat4_identity()
+    m[0] = c;  m[1] = s
+    m[4] = -s; m[5] = c
+    m[12] = 1.0; m[13] = 2.0; m[14] = 3.0
+    _mat4_product_is_identity(m)
+
+def test_mat4_inverse_composed_scale_rotation_translation():
+    """Matriz composta com escala, rotação e translação: M × inv(M) == I."""
+    a = math.pi / 3
+    c = math.cos(a); s = math.sin(a)
+    scale = 2.5
+    m = conv.mat4_identity()
+    m[0] =  c*scale; m[1] = s*scale
+    m[4] = -s*scale; m[5] = c*scale
+    m[10] = scale
+    m[12] = -4.0; m[13] = 1.5; m[14] = 7.0
+    _mat4_product_is_identity(m)
+
+def test_mat4_inverse_singular_raises():
+    """Matriz singular deve lançar ValueError (nunca devolver silenciosamente identidade)."""
+    # Linha 0 = linha 1 → determinante zero
+    m = conv.mat4_identity()
+    m[0] = 1.0; m[1] = 1.0; m[2] = 0.0; m[3] = 0.0   # linha 0
+    m[4] = 1.0; m[5] = 1.0; m[6] = 0.0; m[7] = 0.0   # linha 1 (igual à 0)
+    # column-major: m[r + c*4]
+    # Para matriz singular: coluna 0 = (1,1,0,0), coluna 1 = (1,1,0,0)
+    singular = [0.0] * 16
+    singular[0] = 1.0; singular[1] = 1.0   # coluna 0
+    singular[4] = 1.0; singular[5] = 1.0   # coluna 1
+    singular[10] = 1.0; singular[15] = 1.0
+    raised = False
+    try:
+        conv.mat4_inverse(singular)
+    except ValueError as e:
+        raised = True
+        assert "singular" in str(e).lower() or "pivot" in str(e).lower(), \
+            f"Mensagem de erro deve mencionar 'singular' ou 'pivot': {e}"
+    assert raised, "mat4_inverse de matriz singular deve lançar ValueError"
+
+def test_mat4_inverse_zero_matrix_raises():
+    """Matriz zero deve lançar ValueError."""
+    raised = False
+    try:
+        conv.mat4_inverse([0.0]*16)
+    except ValueError:
+        raised = True
+    assert raised, "mat4_inverse de matriz zero deve lançar ValueError"
 
 # ---------------------------------------------------------------------------
 # Runner
@@ -766,13 +924,27 @@ ALL_TESTS = [
     ("validação: tamanho errado reportado",  test_validate_size_mismatch),
     # Keyframes tamanho
     ("keyframes: tamanho total correcto",    test_keyframe_total_size),
-    # inverseBindMatrices
+    # inverseBindMatrices — originais
     ("IBM: identity compatível",             test_ibm_identity_compatible),
     ("IBM: inverse de translação",           test_ibm_translation_inverse),
     ("IBM: multiply identity",               test_mat4_multiply_identity),
     ("IBM: incompatibilidade detectada",     test_ibm_mismatch_detected),
     # Offsets de vértice
     ("offsets: constantes correctas",        test_vertex_offset_constants),
+    # Novos testes matemáticos mat4_inverse
+    ("mat4_inv: identidade",                 test_mat4_inverse_identity),
+    ("mat4_inv: translação X",               test_mat4_inverse_translation_x),
+    ("mat4_inv: translação Y",               test_mat4_inverse_translation_y),
+    ("mat4_inv: translação Z",               test_mat4_inverse_translation_z),
+    ("mat4_inv: translação XYZ + M×inv=I",  test_mat4_inverse_translation_xyz),
+    ("mat4_inv: rotação 90° Z + M×inv=I",   test_mat4_inverse_rotation_90_z),
+    ("mat4_inv: rotação 45° X + M×inv=I",   test_mat4_inverse_rotation_45_x),
+    ("mat4_inv: escala uniforme 2.0",        test_mat4_inverse_uniform_scale),
+    ("mat4_inv: escala não-uniforme",        test_mat4_inverse_nonuniform_scale),
+    ("mat4_inv: composta rot+transl",        test_mat4_inverse_composed_rotation_translation),
+    ("mat4_inv: composta escala+rot+transl", test_mat4_inverse_composed_scale_rotation_translation),
+    ("mat4_inv: singular lança ValueError",  test_mat4_inverse_singular_raises),
+    ("mat4_inv: zero matrix lança ValueError", test_mat4_inverse_zero_matrix_raises),
 ]
 
 def main():
