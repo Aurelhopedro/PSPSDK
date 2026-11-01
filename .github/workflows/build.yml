@@ -36,9 +36,37 @@ jobs:
           echo "=== Artefactos gerados ==="
           ls -lh EBOOT.PBP PARAM.SFO
 
-      - name: Upload EBOOT.PBP como artefacto
+      - name: Preparar pacote PSP
+        run: |
+          mkdir -p package/PSP/GAME/RPGAXEL/assets
+
+          cp EBOOT.PBP package/PSP/GAME/RPGAXEL/EBOOT.PBP
+
+          if [ -f "assets/characters/protagonist/converted/protagonist.p3d" ]; then
+            cp assets/characters/protagonist/converted/protagonist.p3d \
+               package/PSP/GAME/RPGAXEL/assets/protagonist.p3d
+          else
+            echo "AVISO: protagonist.p3d nao encontrado — pasta assets criada sem o modelo."
+            touch package/PSP/GAME/RPGAXEL/assets/.gitkeep
+          fi
+
+          echo "=== Conteudo do pacote ==="
+          ls -lhR package/PSP/GAME/RPGAXEL/
+
+          echo "=== Validacao ==="
+          test -s package/PSP/GAME/RPGAXEL/EBOOT.PBP \
+            && echo "EBOOT.PBP: OK" \
+            || (echo "ERRO: EBOOT.PBP ausente ou vazio" && exit 1)
+
+          if [ -f "package/PSP/GAME/RPGAXEL/assets/protagonist.p3d" ]; then
+            test -s package/PSP/GAME/RPGAXEL/assets/protagonist.p3d \
+              && echo "protagonist.p3d: OK" \
+              || (echo "ERRO: protagonist.p3d vazio" && exit 1)
+          fi
+
+      - name: Upload pacote PSP como artefacto
         uses: actions/upload-artifact@v4
         with:
           name: RPG-Axel-Digital
-          path: EBOOT.PBP
+          path: package/PSP
           retention-days: 30
