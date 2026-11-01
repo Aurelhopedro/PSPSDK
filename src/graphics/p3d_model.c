@@ -1,6 +1,7 @@
 /*
  * p3d_model.c — RPG Axel Digital
  * FASE 04 — Carregador AXP3 para PSP GU.
+ * FASE 04.1 — Corrigido: sceGumDrawArray respeita a stack GUM.
  *
  * Formato AXP3 v1:
  * Cabeçalho:
@@ -20,6 +21,7 @@
 #include "p3d_model.h"
 
 #include <pspgu.h>
+#include <pspgum.h>
 #include <pspkernel.h>
 #include <pspiofilemgr.h>
 
@@ -32,7 +34,7 @@
 /* Limite de segurança para a memória da PSP. */
 #define P3D_MAX_VERTICES 100000
 
-/* Cada lote contém triângulos completos. */
+/* Cada lote contém triângulos completos (múltiplo de 3). */
 #define P3D_DRAW_BATCH 2046
 
 typedef struct {
@@ -85,7 +87,6 @@ int p3d_model_load(P3DModel *model, const char *path) {
     if (!model || !path)
         return 0;
 
-    /* O modelo deve ter sido inicializado previamente. */
     p3d_model_unload(model);
 
     SceUID fd = sceIoOpen(path, PSP_O_RDONLY, 0);
@@ -102,7 +103,6 @@ int p3d_model_load(P3DModel *model, const char *path) {
     );
 
     if (got != (int)sizeof(header)) {
-
         sceIoClose(fd);
         return 0;
     }
@@ -116,7 +116,6 @@ int p3d_model_load(P3DModel *model, const char *path) {
         header.vertex_count > P3D_MAX_VERTICES ||
         (header.vertex_count % 3) != 0
     ) {
-
         sceIoClose(fd);
         return 0;
     }
@@ -125,30 +124,18 @@ int p3d_model_load(P3DModel *model, const char *path) {
         header.vertex_count * P3D_VERTEX_STRIDE;
 
     /* Confirmar o tamanho real do ficheiro. */
-    int file_size = sceIoLseek32(
-        fd,
-        0,
-        PSP_SEEK_END
-    );
+    int file_size = sceIoLseek32(fd, 0, PSP_SEEK_END);
 
     if (
         file_size < 0 ||
         (unsigned int)file_size !=
             (unsigned int)sizeof(P3DHeader) + data_size
     ) {
-
         sceIoClose(fd);
         return 0;
     }
 
-    if (
-        sceIoLseek32(
-            fd,
-            sizeof(P3DHeader),
-            PSP_SEEK_SET
-        ) < 0
-    ) {
-
+    if (sceIoLseek32(fd, sizeof(P3DHeader), PSP_SEEK_SET) < 0) {
         sceIoClose(fd);
         return 0;
     }
@@ -157,35 +144,25 @@ int p3d_model_load(P3DModel *model, const char *path) {
     void *buffer = memalign(16, data_size);
 
     if (!buffer) {
-
         sceIoClose(fd);
         return 0;
     }
 
-    got = sceIoRead(
-        fd,
-        buffer,
-        data_size
-    );
-
+    got = sceIoRead(fd, buffer, data_size);
     sceIoClose(fd);
 
     if (got != (int)data_size) {
-
         free(buffer);
         return 0;
     }
 
     /* Preparar os dados para acesso pelo hardware gráfico. */
-    sceKernelDcacheWritebackRange(
-        buffer,
-        data_size
-    );
+    sceKernelDcacheWritebackRange(buffer, data_size);
 
-    model->vertices = buffer;
+    model->vertices     = buffer;
     model->vertex_count = header.vertex_count;
-    model->data_size = data_size;
-    model->loaded = 1;
+    model->data_size    = data_size;
+    model->loaded       = 1;
 
     return 1;
 }
@@ -194,16 +171,19 @@ int p3d_model_load(P3DModel *model, const char *path) {
 /* -------------------------------------------------- */
 /* DESENHAR MODELO                                    */
 /* -------------------------------------------------- */
+/*
+ * CORREÇÃO FASE 04.1:
+ * Substituído sceGuDrawArray por sceGumDrawArray.
+ * sceGuDrawArray ignora a stack de matrizes GUM — o modelo
+ * ficava sempre na origem independentemente da translate/rotate
+ * aplicada em player_draw. sceGumDrawArray respeita a
+ * matriz MODEL corrente e aplica a transformação do jogador.
+ */
 
 void p3d_model_draw(const P3DModel *model) {
 
-    if (
-        !model ||
-        !model->loaded ||
-        !model->vertices
-    ) {
+    if (!model || !model->loaded || !model->vertices)
         return;
-    }
 
     sceGuColor(0xFFFFFFFF);
 
@@ -211,26 +191,25 @@ void p3d_model_draw(const P3DModel *model) {
 
     while (offset < model->vertex_count) {
 
-        unsigned int count =
-            model->vertex_count - offset;
+        unsigned int count = model->vertex_count - offset;
 
-        if (count > P3D_DRAW_BATCH) {
+        if (count > P3D_DRAW_BATCH)
             count = P3D_DRAW_BATCH;
-        }
 
         const void *batch =
             (const unsigned char *)model->vertices +
             (offset * P3D_VERTEX_STRIDE);
 
-        sceGuDrawArray(
+        /* sceGumDrawArray aplica a matriz GUM corrente. */
+        sceGumDrawArray(
             GU_TRIANGLES,
 
             GU_TEXTURE_32BITF |
-            GU_NORMAL_32BITF |
-            GU_VERTEX_32BITF |
+            GU_NORMAL_32BITF  |
+            GU_VERTEX_32BITF  |
             GU_TRANSFORM_3D,
 
-            count,
+            (int)count,
             NULL,
             batch
         );
