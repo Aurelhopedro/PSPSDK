@@ -3,8 +3,9 @@
 
 /*
  * player.h — RPG Axel Digital
- * FASE 05 — Suporte a terreno com relevo, colisão com objetos,
- *            e animação esquelética AXS1.
+ * FASE 05   — Suporte a terreno com relevo, colisão com objetos,
+ *             e animação esquelética AXS1.
+ * FASE 05.1 — Campo was_grounded para detetar aterragem (LAND).
  */
 
 #include <pspctrl.h>
@@ -22,7 +23,8 @@ typedef struct {
     float vertical_velocity;
     float walk_time;
 
-    int grounded;
+    int grounded;       /* 1 se o jogador está no chão */
+    int was_grounded;   /* estado de grounded no frame anterior */
     int moving;
 } Player;
 
@@ -30,9 +32,14 @@ void player_init(Player *player);
 
 /*
  * Atualiza movimento, gravidade e salto.
- * Recebe o terreno e os objetos do mundo via parâmetros de callback:
- *   - ground_y: elevação do terreno na posição do jogador.
- *   - px, pz após colisão com objetos (já ajustados por world_collide_player).
+ * Recebe:
+ *   - pad: estado dos controlos
+ *   - delta_time: tempo do frame
+ *   - ground_y: elevação do terreno na posição do jogador
+ *               (já corrigida por world_collide_player)
+ *
+ * Internamente guarda was_grounded = grounded antes de atualizar,
+ * para que player_select_anim possa detetar a transição ar→chão.
  */
 void player_update(
     Player *player,
@@ -56,6 +63,13 @@ void player_draw(
 /*
  * Seleciona o clip de animação adequado ao estado do jogador.
  * Chamar após player_update, antes de p3d_anim_update.
+ *
+ * Lógica:
+ *   - No ar              → JUMP (sem loop)
+ *   - Acabou de aterrar  → LAND (sem loop, uma vez)
+ *   - A reproduzir LAND  → mantém LAND até terminar
+ *   - Em movimento       → WALK (com loop)
+ *   - Parado             → IDLE (com loop)
  */
 void player_select_anim(
     const Player *player,
