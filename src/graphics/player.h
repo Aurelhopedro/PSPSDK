@@ -3,6 +3,8 @@
 
 #include <pspctrl.h>
 
+#include "p3d_model.h"
+
 typedef struct {
     float x;
     float y;
@@ -25,7 +27,7 @@ void player_update(
     float delta_time
 );
 
-void player_draw(const Player *player);
+void player_draw(const Player *player, const P3DModel *model);
 
 void player_draw_ground(void);
 
