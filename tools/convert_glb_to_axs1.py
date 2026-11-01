@@ -197,38 +197,72 @@ def mat4_from_trs(t, r, s=None):
     return m
 
 def mat4_inverse(m):
-    """Inversa de uma matriz 4×4 column-major (método cofactor/adjugate)."""
-    # Expandir para indexação (row, col) = m[row + col*4]
-    def e(r, c): return m[r + c*4]
+    """
+    Inversa de uma matriz 4×4 column-major usando Gauss-Jordan com pivotagem parcial.
 
-    # Cofactores
-    inv = [0.0]*16
+    Convenção: elemento (linha r, coluna c) está em m[r + c*4].
 
-    inv[0]  =  e(1,1)*(e(2,2)*e(3,3)-e(2,3)*e(3,2)) - e(1,2)*(e(2,1)*e(3,3)-e(2,3)*e(3,1)) + e(1,3)*(e(2,1)*e(3,2)-e(2,2)*e(3,1))
-    inv[4]  = -(e(1,0)*(e(2,2)*e(3,3)-e(2,3)*e(3,2)) - e(1,2)*(e(2,0)*e(3,3)-e(2,3)*e(3,0)) + e(1,3)*(e(2,0)*e(3,2)-e(2,2)*e(3,0)))
-    inv[8]  =  e(1,0)*(e(2,1)*e(3,3)-e(2,3)*e(3,1)) - e(1,1)*(e(2,0)*e(3,3)-e(2,3)*e(3,0)) + e(1,3)*(e(2,0)*e(3,1)-e(2,1)*e(3,0))
-    inv[12] = -(e(1,0)*(e(2,1)*e(3,2)-e(2,2)*e(3,1)) - e(1,1)*(e(2,0)*e(3,2)-e(2,2)*e(3,0)) + e(1,2)*(e(2,0)*e(3,1)-e(2,1)*e(3,0)))
+    Lança ValueError com mensagem explícita se a matriz for singular
+    (|pivot| < 1e-10 em qualquer passo). Nunca devolve silenciosamente
+    a identidade quando a inversão não existe.
 
-    inv[1]  = -(e(0,1)*(e(2,2)*e(3,3)-e(2,3)*e(3,2)) - e(0,2)*(e(2,1)*e(3,3)-e(2,3)*e(3,1)) + e(0,3)*(e(2,1)*e(3,2)-e(2,2)*e(3,1)))
-    inv[5]  =  e(0,0)*(e(2,2)*e(3,3)-e(2,3)*e(3,2)) - e(0,2)*(e(2,0)*e(3,3)-e(2,3)*e(3,0)) + e(0,3)*(e(2,0)*e(3,2)-e(2,2)*e(3,0))
-    inv[9]  = -(e(0,0)*(e(2,1)*e(3,3)-e(2,3)*e(3,1)) - e(0,1)*(e(2,0)*e(3,3)-e(2,3)*e(3,0)) + e(0,3)*(e(2,0)*e(3,1)-e(2,1)*e(3,0)))
-    inv[13] =  e(0,0)*(e(2,1)*e(3,2)-e(2,2)*e(3,1)) - e(0,1)*(e(2,0)*e(3,2)-e(2,2)*e(3,0)) + e(0,2)*(e(2,0)*e(3,1)-e(2,1)*e(3,0))
+    Compatível com mat4_multiply e mat4_from_trs desta mesma implementação,
+    e com o loader C que usa column-major.
+    """
+    # Copiar m para augmentada [A | I] — trabalhamos em linhas lógicas
+    # mas o armazenamento é column-major, por isso convertemos primeiro
+    # para uma representação row-major 4×8 interna, operamos, e no fim
+    # extraímos a parte direita em column-major.
 
-    inv[2]  =  e(0,1)*(e(1,2)*e(3,3)-e(1,3)*e(3,2)) - e(0,2)*(e(1,1)*e(3,3)-e(1,3)*e(3,1)) + e(0,3)*(e(1,1)*e(3,2)-e(1,2)*e(3,1))
-    inv[6]  = -(e(0,0)*(e(1,2)*e(3,3)-e(1,3)*e(3,2)) - e(0,2)*(e(1,0)*e(3,3)-e(1,3)*e(3,0)) + e(0,3)*(e(1,0)*e(3,2)-e(1,2)*e(3,0)))
-    inv[10] =  e(0,0)*(e(1,1)*e(3,3)-e(1,3)*e(3,1)) - e(0,1)*(e(1,0)*e(3,3)-e(1,3)*e(3,0)) + e(0,3)*(e(1,0)*e(3,1)-e(1,1)*e(3,0))
-    inv[14] = -(e(0,0)*(e(1,1)*e(3,2)-e(1,2)*e(3,1)) - e(0,1)*(e(1,0)*e(3,2)-e(1,2)*e(3,0)) + e(0,2)*(e(1,0)*e(3,1)-e(1,1)*e(3,0)))
+    # a[r][c] = m[r + c*4]  (ler column-major → linha r, coluna c)
+    a = [[float(m[r + c*4]) for c in range(4)] for r in range(4)]
 
-    inv[3]  = -(e(0,1)*(e(1,2)*e(2,3)-e(1,3)*e(2,2)) - e(0,2)*(e(1,1)*e(2,3)-e(1,3)*e(2,1)) + e(0,3)*(e(1,1)*e(2,2)-e(1,2)*e(2,1)))
-    inv[7]  =  e(0,0)*(e(1,2)*e(2,3)-e(1,3)*e(2,2)) - e(0,2)*(e(1,0)*e(2,3)-e(1,3)*e(2,0)) + e(0,3)*(e(1,0)*e(2,2)-e(1,2)*e(2,0))
-    inv[11] = -(e(0,0)*(e(1,1)*e(2,3)-e(1,3)*e(2,1)) - e(0,1)*(e(1,0)*e(2,3)-e(1,3)*e(2,0)) + e(0,3)*(e(1,0)*e(2,1)-e(1,1)*e(2,0)))
-    inv[15] =  e(0,0)*(e(1,1)*e(2,2)-e(1,2)*e(2,1)) - e(0,1)*(e(1,0)*e(2,2)-e(1,2)*e(2,0)) + e(0,2)*(e(1,0)*e(2,1)-e(1,1)*e(2,0))
+    # Aumentar com identidade à direita: a[r] = [a00..a03 | 1 0 0 0]
+    for r in range(4):
+        row_id = [1.0 if r == c else 0.0 for c in range(4)]
+        a[r] = a[r] + row_id  # lista de 8 elementos
 
-    det = e(0,0)*inv[0] + e(0,1)*inv[4] + e(0,2)*inv[8] + e(0,3)*inv[12]
-    if abs(det) < 1e-12:
-        return mat4_identity()
-    inv_det = 1.0 / det
-    return [v * inv_det for v in inv]
+    for col in range(4):
+        # Pivotagem parcial: encontrar linha com maior |a[r][col]| em r >= col
+        max_val = abs(a[col][col])
+        max_row = col
+        for r in range(col + 1, 4):
+            if abs(a[r][col]) > max_val:
+                max_val = abs(a[r][col])
+                max_row = r
+
+        if max_val < 1e-10:
+            raise ValueError(
+                f"mat4_inverse: matriz singular ou quase-singular "
+                f"(|pivot| = {max_val:.2e} na coluna {col}). "
+                f"A inversão não existe para esta matriz."
+            )
+
+        # Trocar linhas col e max_row
+        if max_row != col:
+            a[col], a[max_row] = a[max_row], a[col]
+
+        # Escalar linha pivot para que a[col][col] == 1
+        pivot = a[col][col]
+        inv_pivot = 1.0 / pivot
+        a[col] = [v * inv_pivot for v in a[col]]
+
+        # Eliminar coluna em todas as outras linhas
+        for r in range(4):
+            if r == col:
+                continue
+            factor = a[r][col]
+            if factor == 0.0:
+                continue
+            a[r] = [a[r][k] - factor * a[col][k] for k in range(8)]
+
+    # Extrair parte direita (colunas 4..7) e converter de volta para column-major
+    # resultado[r + c*4] = a[r][4 + c]
+    result = [0.0] * 16
+    for r in range(4):
+        for c in range(4):
+            result[r + c*4] = a[r][4 + c]
+    return result
 
 def mat4_approx_equal(a, b, tol=1e-3):
     """Compara duas matrizes 4×4 component a componente."""
@@ -236,6 +270,44 @@ def mat4_approx_equal(a, b, tol=1e-3):
         if abs(a[i] - b[i]) > tol:
             return False, i, a[i], b[i]
     return True, -1, 0.0, 0.0
+
+# ---------------------------------------------------------------------------
+# Validação de escala de ossos para compatibilidade com runtime AXS1
+# ---------------------------------------------------------------------------
+
+def validate_bone_scales(gltf, ordered_si, joint_nodes):
+    """
+    Verifica que nenhum osso selecionado para o esqueleto tem escala não-unitária.
+
+    O formato AXS1 guarda apenas posição e quaternião — não guarda escala.
+    O runtime PSP usa mat4_invert_rigid(), que só é válido para transformações
+    rígidas (sem escala). Uma escala não-unitária num osso produziria uma
+    transformação incorreta no runtime.
+
+    Lança RuntimeError identificando o osso e a escala problemática.
+    """
+    SCALE_TOL = 1e-3  # tolerância: |s - 1.0| > SCALE_TOL → erro
+
+    for si in ordered_si:
+        node_idx = joint_nodes[si]
+        node = gltf.nodes[node_idx]
+        node_name = node.name or f"node_{node_idx}"
+
+        if node.scale is None:
+            continue  # escala implícita [1,1,1] — OK
+
+        sx, sy, sz = float(node.scale[0]), float(node.scale[1]), float(node.scale[2])
+
+        if (abs(sx - 1.0) > SCALE_TOL or
+                abs(sy - 1.0) > SCALE_TOL or
+                abs(sz - 1.0) > SCALE_TOL):
+            raise RuntimeError(
+                f"ERRO DE COMPATIBILIDADE: o osso '{node_name}' (skin_joint {si}) "
+                f"tem escala não-unitária [{sx:.6f}, {sy:.6f}, {sz:.6f}]. "
+                f"O formato AXS1 não representa escala nos ossos e o runtime PSP "
+                f"usa mat4_invert_rigid(), que assume transformação rígida. "
+                f"Remova ou aplique (bake) a escala no DCC antes de exportar."
+            )
 
 # ---------------------------------------------------------------------------
 # Leitura de accessors GLTF
@@ -349,7 +421,10 @@ def extract_skeleton(gltf):
     ordered_si = [si for si in range(n_skin) if si in expanded]
     skin_to_axs1 = {si: ai for ai, si in enumerate(ordered_si)}
 
-    # --- 4. Construir matrizes globais de bind para validação IBM ---
+    # --- 4. Validar escalas ANTES de qualquer inversão ---
+    validate_bone_scales(gltf, ordered_si, joint_nodes)
+
+    # --- 5. Construir matrizes globais de bind para validação IBM ---
     # global_bind[si] = matriz 4×4 global desse nó
     global_bind = {}
     for si_ordered in ordered_si:
@@ -365,7 +440,7 @@ def extract_skeleton(gltf):
         else:
             global_bind[si_ordered] = local_mat
 
-    # --- 5. Validar inverseBindMatrices ---
+    # --- 6. Validar inverseBindMatrices ---
     ibm_raw = None
     if skin.inverseBindMatrices is not None:
         ibm_data = get_accessor_data(gltf, skin.inverseBindMatrices)
@@ -376,7 +451,15 @@ def extract_skeleton(gltf):
 
     for si_ordered in ordered_si:
         gbind = global_bind[si_ordered]
-        derived_ibm = mat4_inverse(gbind)
+        try:
+            derived_ibm = mat4_inverse(gbind)
+        except ValueError as e:
+            node_name = gltf.nodes[joint_nodes[si_ordered]].name or f"node_{joint_nodes[si_ordered]}"
+            raise RuntimeError(
+                f"ERRO: não foi possível calcular inverseBindMatrix do osso '{node_name}' "
+                f"(skin_joint {si_ordered}): {e}"
+            ) from e
+
         provided_ibm = [float(v) for v in ibm_raw[si_ordered]]
 
         ok, comp_idx, got, expected_v = mat4_approx_equal(derived_ibm, provided_ibm, tol=1e-2)
@@ -389,7 +472,7 @@ def extract_skeleton(gltf):
                 f"O modelo pode ter transformações não-locais (ex: escala não-unitária no pai)."
             )
 
-    # --- 6. Construir lista de ossos AXS1 ---
+    # --- 7. Construir lista de ossos AXS1 ---
     bones = []
     for ai, si in enumerate(ordered_si):
         node_idx = joint_nodes[si]
