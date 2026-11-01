@@ -36,14 +36,30 @@ jobs:
           python3 tools/test_convert_glb_to_axs1.py
           echo "Testes: OK"
 
+      - name: Retargeting de esqueleto (63 → 24 ossos)
+        run: |
+          GLB_SRC="assets/characters/protagonist/source/protagonist.glb"
+          GLB_24="assets/characters/protagonist/source/protagonist_24bones.glb"
+
+          if [ ! -f "$GLB_SRC" ]; then
+            echo "ERRO: $GLB_SRC não encontrado."
+            exit 1
+          fi
+
+          echo "=== A reduzir esqueleto para 24 ossos ==="
+          python3 tools/retarget_skeleton_24.py "$GLB_SRC" "$GLB_24"
+
+          echo "=== GLB retargetado ==="
+          ls -lh "$GLB_24"
+
       - name: Converter protagonist.glb → protagonist.axs
         run: |
-          GLB="assets/characters/protagonist/source/protagonist.glb"
+          GLB="assets/characters/protagonist/source/protagonist_24bones.glb"
           AXS="assets/characters/protagonist/converted/protagonist.axs"
           REPORT="assets/characters/protagonist/converted/AXS1-REPORT.md"
 
           if [ ! -f "$GLB" ]; then
-            echo "ERRO: $GLB não encontrado."
+            echo "ERRO: $GLB não encontrado (retargeting falhou?)."
             exit 1
           fi
 
